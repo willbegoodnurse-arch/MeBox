@@ -127,6 +127,10 @@ h1 {
   background: #eee7f8;
 }
 
+.item-file {
+  background: #e7f0ee;
+}
+
 .card-meta {
   display: flex;
   align-items: center;
@@ -159,6 +163,17 @@ h1 {
   color: #5d6761;
   font-size: 12px;
   margin-top: 4px;
+}
+
+.download-link {
+  display: inline-flex;
+  align-items: center;
+  min-height: 30px;
+  color: #1f6f4a;
+  font-size: 13px;
+  font-weight: 700;
+  margin-top: 8px;
+  text-decoration: none;
 }
 
 .check-list {
@@ -362,6 +377,55 @@ button:disabled {
   font-weight: 700;
   padding: 0 14px;
   text-decoration: none;
+}
+
+.more-grid .more-link {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  min-height: 52px;
+  border: 1px solid #dfe6e1;
+  border-radius: 8px;
+  color: #111512;
+  background: #ffffff;
+  font-weight: 700;
+  padding: 0 14px;
+  text-align: left;
+}
+
+.secondary-button {
+  background: #ffffff;
+  border: 1px solid #d5ded7;
+  color: #1f6f4a;
+}
+
+.file-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.file-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  min-height: 58px;
+  border: 1px solid #dfe6e1;
+  border-radius: 8px;
+  background: #ffffff;
+  color: #111512;
+  padding: 10px 14px;
+  text-decoration: none;
+}
+
+.file-row strong,
+.file-row small {
+  display: block;
+}
+
+.file-row small {
+  color: #66706a;
+  margin-top: 3px;
 }
 
 @media (min-width: 760px) {

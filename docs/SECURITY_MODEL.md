@@ -42,4 +42,45 @@ The MVP backend disables Fastify request logging by default.
 
 ## Storage
 
-SQLite data is stored locally under `data/` by default. File metadata has a schema, but upload handling is intentionally left as a TODO until MIME allowlists, size limits, random stored filenames, and local disk paths are implemented together.
+SQLite data is stored locally under `data/` by default. Uploaded files are stored locally under `uploads/`.
+
+## File Upload Threat Model
+
+Files are private inbox items for a single user on a Tailscale-only deployment. The MVP does not implement public file sharing, public file URLs, or multi-user permissions.
+
+Threats handled by the MVP upload path:
+
+- Executable uploads: dangerous extensions are rejected even when the MIME type is otherwise allowed.
+- Unknown file types: uploads are accepted only for the explicit safe MIME allowlist.
+- Oversized uploads: files larger than 5 MB are rejected.
+- Path traversal: upload filenames containing path separators are rejected, stored filenames must match the random server-generated pattern, and downloads resolve paths under `uploads/` before opening a file.
+- Filename abuse: raw user filenames are never used as stored filenames. The original filename is stored only as SQLite metadata.
+- Content leakage through logs: Fastify request logging is disabled and upload payloads are not logged.
+
+Allowed MVP MIME types:
+
+- `image/jpeg`
+- `image/png`
+- `image/webp`
+- `application/pdf`
+- `text/plain`
+- `text/markdown`
+
+Rejected dangerous extensions:
+
+- `.exe`
+- `.dll`
+- `.bat`
+- `.cmd`
+- `.ps1`
+- `.sh`
+- `.js`
+- `.mjs`
+- `.cjs`
+- `.html`
+- `.htm`
+- `.svg`
+- `.php`
+- `.jar`
+
+Download routes are local API routes by file item id. Missing files and unsafe stored paths return a generic `File not found` response.
