@@ -1,6 +1,21 @@
 import Fastify from 'fastify'
 import type Database from 'better-sqlite3'
+import type { IncomingHttpHeaders } from 'node:http'
 import { listAlerts } from './alerts'
+import {
+  AuthError,
+  SESSION_COOKIE_NAME,
+  SESSION_TTL_SECONDS,
+  createFirstUser,
+  createSession,
+  hasUser,
+  makeLogoutCookie,
+  makeSessionCookie,
+  parseCookie,
+  revokeSession,
+  validateSession,
+  verifyLogin,
+} from './auth'
 import {
   MAX_UPLOAD_BYTES,
   UploadValidationError,
@@ -12,12 +27,14 @@ import {
 import { getItem, listInboxItems, type ItemRow } from './items'
 import {
   announcementInputSchema,
+  loginInputSchema,
   linkInputSchema,
   listInputSchema,
   noteInputSchema,
   paginationSchema,
   recurringExpenseInputSchema,
   searchQuerySchema,
+  setupInputSchema,
   todoInputSchema,
 } from './validation'
 
@@ -42,6 +59,36 @@ function likeTerm(query: string) {
   return `%${escaped}%`
 }
 
+function isPublicPath(path: string) {
+  return (
+    path === '/api/health' ||
+    path === '/api/auth/setup' ||
+    path === '/api/auth/login' ||
+    path === '/api/auth/logout' ||
+    path === '/api/auth/me'
+  )
+}
+
+function shouldUseSecureCookie(headers: IncomingHttpHeaders) {
+  const forwardedProto = headers['x-forwarded-proto']
+  const isForwardedHttps = Array.isArray(forwardedProto)
+    ? forwardedProto.includes('https')
+    : forwardedProto === 'https'
+
+  return (
+    process.env.NODE_ENV === 'production' ||
+    process.env.MEBOX_COOKIE_SECURE === 'true' ||
+    isForwardedHttps
+  )
+}
+
+function safeUser(user: { id: number; username: string }) {
+  return {
+    id: user.id,
+    username: user.username,
+  }
+}
+
 export function createApp({ db, uploadDir = 'uploads' }: AppOptions) {
   const app = Fastify({ logger: false, bodyLimit: MAX_UPLOAD_BYTES })
 
@@ -60,6 +107,11 @@ export function createApp({ db, uploadDir = 'uploads' }: AppOptions) {
     }
 
     if (error instanceof UploadValidationError) {
+      reply.code(error.statusCode).send({ error: error.message })
+      return
+    }
+
+    if (error instanceof AuthError) {
       reply.code(error.statusCode).send({ error: error.message })
       return
     }
@@ -85,10 +137,87 @@ export function createApp({ db, uploadDir = 'uploads' }: AppOptions) {
     reply.code(500).send({ error: 'Internal server error' })
   })
 
+  app.addHook('preHandler', async (request, reply) => {
+    if (!request.url.startsWith('/api/') || isPublicPath(request.url.split('?')[0])) {
+      return
+    }
+
+    const token = parseCookie(request.headers.cookie, SESSION_COOKIE_NAME)
+    const session = validateSession(db, token)
+    if (!session) {
+      return reply.code(401).send({ error: 'Authentication required' })
+    }
+  })
+
   app.get('/api/health', async () => ({
     ok: true,
     storage: 'sqlite',
   }))
+
+  app.get('/api/auth/me', async (request) => {
+    const token = parseCookie(request.headers.cookie, SESSION_COOKIE_NAME)
+    const session = validateSession(db, token)
+
+    return {
+      authenticated: session !== null,
+      setupRequired: !hasUser(db),
+      user: session ? safeUser(session.user) : null,
+    }
+  })
+
+  app.post('/api/auth/setup', async (request, reply) => {
+    const input = parseBody(setupInputSchema, request.body)
+    const user = await createFirstUser(db, input)
+    const session = createSession(db, user.id)
+
+    reply
+      .code(201)
+      .header(
+        'set-cookie',
+        makeSessionCookie({
+          token: session.token,
+          maxAgeSeconds: SESSION_TTL_SECONDS,
+          secure: shouldUseSecureCookie(request.headers),
+        }),
+      )
+
+    return {
+      authenticated: true,
+      setupRequired: false,
+      user: safeUser(user),
+    }
+  })
+
+  app.post('/api/auth/login', async (request, reply) => {
+    const input = parseBody(loginInputSchema, request.body)
+    const user = await verifyLogin(db, input)
+    const session = createSession(db, user.id)
+
+    reply.header(
+      'set-cookie',
+      makeSessionCookie({
+        token: session.token,
+        maxAgeSeconds: SESSION_TTL_SECONDS,
+        secure: shouldUseSecureCookie(request.headers),
+      }),
+    )
+
+    return {
+      authenticated: true,
+      setupRequired: false,
+      user: safeUser(user),
+    }
+  })
+
+  app.post('/api/auth/logout', async (request, reply) => {
+    const token = parseCookie(request.headers.cookie, SESSION_COOKIE_NAME)
+    revokeSession(db, token)
+    reply.header(
+      'set-cookie',
+      makeLogoutCookie(shouldUseSecureCookie(request.headers)),
+    )
+    return { ok: true }
+  })
 
   app.get('/api/items', async (request) => {
     const { limit, offset } = paginationSchema.parse(request.query)

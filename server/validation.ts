@@ -53,3 +53,12 @@ export const searchQuerySchema = z.object({
   q: z.string().trim().min(1).max(200),
   type: z.string().trim().optional(),
 })
+
+export const setupInputSchema = z.object({
+  username: z.string().trim().min(1).max(80).optional(),
+  password: z.string().min(8).max(200),
+})
+
+export const loginInputSchema = z.object({
+  password: z.string().min(1).max(200),
+})

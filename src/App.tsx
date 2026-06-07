@@ -35,6 +35,13 @@ type FileRecord = {
   downloadUrl: string
 }
 
+type AuthResponse = {
+  authenticated: boolean
+  setupRequired: boolean
+  user: { id: number; username: string } | null
+}
+
+type AuthView = 'loading' | 'setup' | 'login' | 'authenticated'
 type NavKey = 'inbox' | 'search' | 'more' | 'files'
 type CreateType =
   | 'note'
@@ -75,6 +82,7 @@ const moreLinks = [
 
 async function apiFetch<T>(path: string, init?: RequestInit): Promise<T> {
   const response = await fetch(path, {
+    credentials: 'same-origin',
     ...init,
     headers: {
       'Content-Type': 'application/json',
@@ -92,6 +100,7 @@ async function apiFetch<T>(path: string, init?: RequestInit): Promise<T> {
 async function uploadFile(file: File) {
   const response = await fetch('/api/items/files', {
     method: 'POST',
+    credentials: 'same-origin',
     headers: {
       'Content-Type': file.type,
       'x-filename': file.name,
@@ -236,6 +245,77 @@ function ItemCard({ item }: { item: InboxItem }) {
         </>
       )}
     </article>
+  )
+}
+
+function AuthScreen({
+  mode,
+  onAuthenticated,
+}: {
+  mode: 'setup' | 'login'
+  onAuthenticated: () => void
+}) {
+  const [username, setUsername] = useState('local')
+  const [password, setPassword] = useState('')
+  const [error, setError] = useState('')
+  const [isSubmitting, setIsSubmitting] = useState(false)
+
+  async function submit(event: FormEvent) {
+    event.preventDefault()
+    setIsSubmitting(true)
+    setError('')
+
+    try {
+      await apiFetch<AuthResponse>(
+        mode === 'setup' ? '/api/auth/setup' : '/api/auth/login',
+        {
+          method: 'POST',
+          body: JSON.stringify(
+            mode === 'setup' ? { username, password } : { password },
+          ),
+        },
+      )
+      setPassword('')
+      onAuthenticated()
+    } catch {
+      setError(mode === 'setup' ? '설정을 완료하지 못했습니다.' : '로그인할 수 없습니다.')
+    } finally {
+      setIsSubmitting(false)
+    }
+  }
+
+  return (
+    <main className="auth-screen">
+      <form className="auth-panel" onSubmit={submit}>
+        <span className="eyebrow">MeBox</span>
+        <h1>{mode === 'setup' ? '첫 설정' : '로그인'}</h1>
+
+        {mode === 'setup' && (
+          <input
+            aria-label="사용자 이름"
+            autoComplete="username"
+            onChange={(event) => setUsername(event.target.value)}
+            placeholder="사용자 이름"
+            value={username}
+          />
+        )}
+
+        <input
+          aria-label="비밀번호"
+          autoComplete={mode === 'setup' ? 'new-password' : 'current-password'}
+          onChange={(event) => setPassword(event.target.value)}
+          placeholder="비밀번호"
+          type="password"
+          value={password}
+        />
+
+        {error && <p className="form-error">{error}</p>}
+
+        <button disabled={isSubmitting || password.length < 8} type="submit">
+          {mode === 'setup' ? '설정 완료' : '로그인'}
+        </button>
+      </form>
+    </main>
   )
 }
 
@@ -572,7 +652,13 @@ function SearchScreen() {
   )
 }
 
-function MoreScreen({ onOpenFiles }: { onOpenFiles: () => void }) {
+function MoreScreen({
+  onLogout,
+  onOpenFiles,
+}: {
+  onLogout: () => void
+  onOpenFiles: () => void
+}) {
   return (
     <main className="screen">
       <header className="app-header compact">
@@ -596,6 +682,10 @@ function MoreScreen({ onOpenFiles }: { onOpenFiles: () => void }) {
             </a>
           ),
         )}
+        <button className="more-link danger-link" onClick={onLogout} type="button">
+          <span>Logout</span>
+          <span aria-hidden="true">›</span>
+        </button>
       </section>
     </main>
   )
@@ -655,10 +745,24 @@ function FilesScreen({ onBack }: { onBack: () => void }) {
 }
 
 function App() {
+  const [authView, setAuthView] = useState<AuthView>('loading')
   const [activeNav, setActiveNav] = useState<NavKey>('inbox')
   const [items, setItems] = useState<InboxItem[]>([])
   const [alerts, setAlerts] = useState<AlertItem[]>([])
   const [loadError, setLoadError] = useState('')
+
+  async function refreshAuth() {
+    try {
+      const response = await apiFetch<AuthResponse>('/api/auth/me')
+      if (response.authenticated) {
+        setAuthView('authenticated')
+      } else {
+        setAuthView(response.setupRequired ? 'setup' : 'login')
+      }
+    } catch {
+      setAuthView('login')
+    }
+  }
 
   async function refreshInbox() {
     try {
@@ -674,9 +778,26 @@ function App() {
     }
   }
 
+  async function logout() {
+    try {
+      await apiFetch<{ ok: boolean }>('/api/auth/logout', { method: 'POST' })
+    } finally {
+      setItems([])
+      setAlerts([])
+      setActiveNav('inbox')
+      setAuthView('login')
+    }
+  }
+
   useEffect(() => {
-    void Promise.resolve().then(refreshInbox)
+    void Promise.resolve().then(refreshAuth)
   }, [])
+
+  useEffect(() => {
+    if (authView === 'authenticated') {
+      void Promise.resolve().then(refreshInbox)
+    }
+  }, [authView])
 
   const screen = useMemo(() => {
     if (activeNav === 'search') {
@@ -686,7 +807,14 @@ function App() {
       return <FilesScreen onBack={() => setActiveNav('more')} />
     }
     if (activeNav === 'more') {
-      return <MoreScreen onOpenFiles={() => setActiveNav('files')} />
+      return (
+        <MoreScreen
+          onLogout={() => {
+            void logout()
+          }}
+          onOpenFiles={() => setActiveNav('files')}
+        />
+      )
     }
     return (
       <InboxScreen
@@ -699,6 +827,28 @@ function App() {
       />
     )
   }, [activeNav, alerts, items])
+
+  if (authView === 'loading') {
+    return (
+      <main className="auth-screen">
+        <div className="auth-panel">
+          <span className="eyebrow">MeBox</span>
+          <h1>로딩</h1>
+        </div>
+      </main>
+    )
+  }
+
+  if (authView === 'setup' || authView === 'login') {
+    return (
+      <AuthScreen
+        mode={authView}
+        onAuthenticated={() => {
+          setAuthView('authenticated')
+        }}
+      />
+    )
+  }
 
   return (
     <div className="app-shell">

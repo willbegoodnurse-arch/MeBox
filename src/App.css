@@ -14,6 +14,38 @@
   flex: 1;
 }
 
+.auth-screen {
+  min-height: 100svh;
+  display: grid;
+  place-items: center;
+  padding: 18px;
+  background: #f6f7f4;
+}
+
+.auth-panel {
+  width: min(100%, 360px);
+  border: 1px solid #dfe6e1;
+  border-radius: 8px;
+  background: #ffffff;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 18px;
+}
+
+.auth-panel input {
+  width: 100%;
+  border: 1px solid #d5ded7;
+  border-radius: 8px;
+  background: #ffffff;
+  box-sizing: border-box;
+  color: #161a18;
+  font: inherit;
+  font-size: 15px;
+  min-height: 42px;
+  padding: 9px 12px;
+}
+
 .inbox-screen {
   padding-bottom: 168px;
 }
@@ -391,6 +423,10 @@ button:disabled {
   font-weight: 700;
   padding: 0 14px;
   text-align: left;
+}
+
+.more-grid .danger-link {
+  color: #8d1f16;
 }
 
 .secondary-button {

@@ -8,6 +8,7 @@ import { createApp } from './app'
 import { initializeSchema } from './db/schema'
 import { listAlerts, nextBillingDate } from './alerts'
 import { MAX_UPLOAD_BYTES } from './files'
+import { createFirstUser, createSession } from './auth'
 
 function testDb() {
   const db = new Database(':memory:')
@@ -24,10 +25,33 @@ async function closeTestApp(app: ReturnType<typeof createApp>, db: Database.Data
   db.close()
 }
 
+function cookieFromResponse(response: Awaited<ReturnType<ReturnType<typeof createApp>['inject']>>) {
+  const setCookie = response.headers['set-cookie']
+  const header = Array.isArray(setCookie) ? setCookie[0] : setCookie
+  assert.equal(typeof header, 'string')
+  if (!header) {
+    throw new Error('Missing session cookie')
+  }
+
+  return header.split(';')[0]
+}
+
+async function authCookie(app: ReturnType<typeof createApp>) {
+  const response = await app.inject({
+    method: 'POST',
+    url: '/api/auth/setup',
+    payload: { password: 'correct horse battery staple' },
+  })
+
+  assert.equal(response.statusCode, 201)
+  return cookieFromResponse(response)
+}
+
 function uploadRequest(input: {
   filename: string
   mimeType: string
   body?: Buffer
+  cookie?: string
 }) {
   return {
     method: 'POST' as const,
@@ -35,6 +59,7 @@ function uploadRequest(input: {
     headers: {
       'content-type': input.mimeType,
       'x-filename': input.filename,
+      ...(input.cookie ? { cookie: input.cookie } : {}),
     },
     payload: input.body ?? Buffer.from('hello'),
   }
@@ -51,15 +76,20 @@ function tableCount(db: Database.Database, tableName: string) {
 test('creates and lists note items', async () => {
   const db = testDb()
   const app = createApp({ db })
+  const cookie = await authCookie(app)
 
   const createResponse = await app.inject({
     method: 'POST',
     url: '/api/items/notes',
+    headers: { cookie },
     payload: { body: 'private note' },
   })
 
   assert.equal(createResponse.statusCode, 201)
-  const listResponse = await app.inject('/api/items')
+  const listResponse = await app.inject({
+    url: '/api/items',
+    headers: { cookie },
+  })
   const payload = listResponse.json()
 
   assert.equal(payload.items.length, 1)
@@ -71,19 +101,25 @@ test('creates and lists note items', async () => {
 test('searches notes and links without requiring external services', async () => {
   const db = testDb()
   const app = createApp({ db })
+  const cookie = await authCookie(app)
 
   await app.inject({
     method: 'POST',
     url: '/api/items/notes',
+    headers: { cookie },
     payload: { body: 'receipt for laptop stand' },
   })
   await app.inject({
     method: 'POST',
     url: '/api/items/links',
+    headers: { cookie },
     payload: { url: 'https://example.test/read', title: 'Reading list' },
   })
 
-  const response = await app.inject('/api/search?q=read')
+  const response = await app.inject({
+    url: '/api/search?q=read',
+    headers: { cookie },
+  })
   const payload = response.json()
 
   assert.equal(response.statusCode, 200)
@@ -130,12 +166,14 @@ test('accepts allowed file MIME type and persists metadata', async () => {
   const db = testDb()
   const uploadDir = testUploadDir()
   const app = createApp({ db, uploadDir })
+  const cookie = await authCookie(app)
 
   const response = await app.inject(
     uploadRequest({
       filename: 'photo.png',
       mimeType: 'image/png',
       body: Buffer.from([0x89, 0x50, 0x4e, 0x47]),
+      cookie,
     }),
   )
   const payload = response.json()
@@ -166,11 +204,13 @@ test('rejects blocked file MIME type', async () => {
   const db = testDb()
   const uploadDir = testUploadDir()
   const app = createApp({ db, uploadDir })
+  const cookie = await authCookie(app)
 
   const response = await app.inject(
     uploadRequest({
       filename: 'archive.zip',
       mimeType: 'application/zip',
+      cookie,
     }),
   )
 
@@ -186,11 +226,13 @@ test('rejects dangerous file extension even with allowed MIME type', async () =>
   const db = testDb()
   const uploadDir = testUploadDir()
   const app = createApp({ db, uploadDir })
+  const cookie = await authCookie(app)
 
   const response = await app.inject(
     uploadRequest({
       filename: 'script.js',
       mimeType: 'text/plain',
+      cookie,
     }),
   )
 
@@ -206,12 +248,14 @@ test('rejects uploads over the size limit', async () => {
   const db = testDb()
   const uploadDir = testUploadDir()
   const app = createApp({ db, uploadDir })
+  const cookie = await authCookie(app)
 
   const response = await app.inject(
     uploadRequest({
       filename: 'large.txt',
       mimeType: 'text/plain',
       body: Buffer.alloc(MAX_UPLOAD_BYTES + 1, 'a'),
+      cookie,
     }),
   )
 
@@ -227,11 +271,13 @@ test('rejects upload filename path traversal', async () => {
   const db = testDb()
   const uploadDir = testUploadDir()
   const app = createApp({ db, uploadDir })
+  const cookie = await authCookie(app)
 
   const response = await app.inject(
     uploadRequest({
       filename: '../safe.txt',
       mimeType: 'text/plain',
+      cookie,
     }),
   )
 
@@ -247,6 +293,9 @@ test('download route rejects stored filename path traversal', async () => {
   const db = testDb()
   const uploadDir = testUploadDir()
   const app = createApp({ db, uploadDir })
+  await createFirstUser(db, { password: 'correct horse battery staple' })
+  const session = createSession(db, 1)
+  const cookie = `mebox_session=${session.token}`
   const itemId = Number(
     db
       .prepare('INSERT INTO items (type, body) VALUES (?, ?)')
@@ -258,7 +307,10 @@ test('download route rejects stored filename path traversal', async () => {
       VALUES (?, ?, ?, ?, ?)`,
   ).run(itemId, 'safe.txt', '../safe.txt', 'text/plain', 4)
 
-  const response = await app.inject(`/api/files/${itemId}`)
+  const response = await app.inject({
+    url: `/api/files/${itemId}`,
+    headers: { cookie },
+  })
 
   assert.equal(response.statusCode, 404)
   assert.deepEqual(response.json(), { error: 'File not found' })
@@ -271,12 +323,172 @@ test('missing file id returns safe 404', async () => {
   const db = testDb()
   const uploadDir = testUploadDir()
   const app = createApp({ db, uploadDir })
+  const cookie = await authCookie(app)
 
-  const response = await app.inject('/api/files/9999')
+  const response = await app.inject({
+    url: '/api/files/9999',
+    headers: { cookie },
+  })
 
   assert.equal(response.statusCode, 404)
   assert.deepEqual(response.json(), { error: 'File not found' })
 
   await closeTestApp(app, db)
   rmSync(uploadDir, { recursive: true, force: true })
+})
+
+test('setup creates first user with argon2id hash and safe response', async () => {
+  const db = testDb()
+  const app = createApp({ db })
+  const password = 'correct horse battery staple'
+
+  const response = await app.inject({
+    method: 'POST',
+    url: '/api/auth/setup',
+    payload: { username: 'me', password },
+  })
+  const payloadText = response.payload
+  const user = db
+    .prepare('SELECT username, password_hash FROM users WHERE id = 1')
+    .get() as { username: string; password_hash: string }
+
+  assert.equal(response.statusCode, 201)
+  assert.equal(response.json().authenticated, true)
+  assert.equal(user.username, 'me')
+  assert.match(user.password_hash, /^\$argon2id\$/)
+  assert.notEqual(user.password_hash, password)
+  assert.equal(payloadText.includes(password), false)
+  assert.equal(payloadText.includes(user.password_hash), false)
+  assert.equal(payloadText.includes('token'), false)
+
+  await closeTestApp(app, db)
+})
+
+test('setup refuses second user', async () => {
+  const db = testDb()
+  const app = createApp({ db })
+
+  await app.inject({
+    method: 'POST',
+    url: '/api/auth/setup',
+    payload: { password: 'correct horse battery staple' },
+  })
+  const response = await app.inject({
+    method: 'POST',
+    url: '/api/auth/setup',
+    payload: { password: 'another correct battery staple' },
+  })
+
+  assert.equal(response.statusCode, 409)
+  assert.deepEqual(response.json(), { error: 'Setup is already complete' })
+  assert.equal(tableCount(db, 'users'), 1)
+
+  await closeTestApp(app, db)
+})
+
+test('login succeeds with correct password and returns HttpOnly cookie', async () => {
+  const db = testDb()
+  const app = createApp({ db })
+
+  await createFirstUser(db, { password: 'correct horse battery staple' })
+  const response = await app.inject({
+    method: 'POST',
+    url: '/api/auth/login',
+    payload: { password: 'correct horse battery staple' },
+  })
+  const cookie = response.headers['set-cookie']
+
+  assert.equal(response.statusCode, 200)
+  assert.equal(response.json().authenticated, true)
+  assert.equal(JSON.stringify(response.json()).includes('token'), false)
+  assert.equal(typeof cookie, 'string')
+  assert.match(String(cookie), /HttpOnly/)
+  assert.match(String(cookie), /SameSite=Lax/)
+
+  await closeTestApp(app, db)
+})
+
+test('login fails with wrong password using generic response', async () => {
+  const db = testDb()
+  const app = createApp({ db })
+
+  await createFirstUser(db, { password: 'correct horse battery staple' })
+  const response = await app.inject({
+    method: 'POST',
+    url: '/api/auth/login',
+    payload: { password: 'wrong password' },
+  })
+
+  assert.equal(response.statusCode, 401)
+  assert.deepEqual(response.json(), { error: 'Invalid password' })
+  assert.equal(response.headers['set-cookie'], undefined)
+
+  await closeTestApp(app, db)
+})
+
+test('protected routes reject unauthenticated requests', async () => {
+  const db = testDb()
+  const app = createApp({ db })
+
+  await createFirstUser(db, { password: 'correct horse battery staple' })
+  const response = await app.inject('/api/items')
+
+  assert.equal(response.statusCode, 401)
+  assert.deepEqual(response.json(), { error: 'Authentication required' })
+
+  await closeTestApp(app, db)
+})
+
+test('protected routes accept authenticated session cookie', async () => {
+  const db = testDb()
+  const app = createApp({ db })
+  const cookie = await authCookie(app)
+
+  const response = await app.inject({
+    url: '/api/items',
+    headers: { cookie },
+  })
+
+  assert.equal(response.statusCode, 200)
+  assert.deepEqual(response.json(), { items: [] })
+
+  await closeTestApp(app, db)
+})
+
+test('logout invalidates session server-side', async () => {
+  const db = testDb()
+  const app = createApp({ db })
+  const cookie = await authCookie(app)
+
+  const logoutResponse = await app.inject({
+    method: 'POST',
+    url: '/api/auth/logout',
+    headers: { cookie },
+  })
+  const protectedResponse = await app.inject({
+    url: '/api/items',
+    headers: { cookie },
+  })
+
+  assert.equal(logoutResponse.statusCode, 200)
+  assert.match(String(logoutResponse.headers['set-cookie']), /Max-Age=0/)
+  assert.equal(protectedResponse.statusCode, 401)
+
+  await closeTestApp(app, db)
+})
+
+test('expired session is rejected', async () => {
+  const db = testDb()
+  const app = createApp({ db })
+
+  await createFirstUser(db, { password: 'correct horse battery staple' })
+  const session = createSession(db, 1, new Date('2020-01-01T00:00:00.000Z'))
+  const response = await app.inject({
+    url: '/api/items',
+    headers: { cookie: `mebox_session=${session.token}` },
+  })
+
+  assert.equal(response.statusCode, 401)
+
+  await closeTestApp(app, db)
 })

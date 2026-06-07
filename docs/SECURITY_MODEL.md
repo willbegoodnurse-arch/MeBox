@@ -13,6 +13,8 @@ MeBox is a single-user local app intended for Tailscale-only access.
 
 The app should bind to localhost during development. Any LAN or Tailscale exposure must be handled by the operator's private network policy.
 
+The local login layer is required before reading inbox data or writing items, but it is not a replacement for Tailscale-only access. Keep the app off the public internet.
+
 ## Forbidden Data
 
 MeBox must not be used to store:
@@ -39,6 +41,33 @@ Do not log:
 - Private request payloads.
 
 The MVP backend disables Fastify request logging by default.
+
+## Auth And Session Threat Model
+
+MeBox supports exactly one local user.
+
+- No open registration.
+- No second user creation after first-run setup.
+- No password reset flow.
+- No email flow.
+- No OAuth.
+- No external identity provider.
+
+Passwords are hashed with argon2id before storage. Plaintext passwords are never stored. Password hashes are not returned by API responses.
+
+Sessions use high-entropy random IDs. The raw session ID is sent only as an HttpOnly cookie named `mebox_session`; it is not returned in JSON and should not be readable by frontend JavaScript. The database stores a SHA-256 hash of the session ID, not the raw session ID.
+
+Session cookies use:
+
+- `HttpOnly`
+- `SameSite=Lax`
+- `Path=/`
+- `Max-Age` matching the server session expiry
+- `Secure` when production mode, `MEBOX_COOKIE_SECURE=true`, or HTTPS forwarding is detected
+
+Sessions expire server-side. Logout revokes the matching session on the server and sends an expired cookie. Expired and revoked sessions are rejected by protected API routes.
+
+Protected APIs include inbox reads, item creation, search, alerts, file metadata, upload, and download routes. `/api/health` remains public. Auth routes return sanitized errors and do not expose whether different accounts exist because there is only one local account.
 
 ## Storage
 
