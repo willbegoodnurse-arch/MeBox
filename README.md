@@ -10,6 +10,7 @@ Signal-like personal inbox app for self-hosted private notes, links, tasks, list
 - Zod request validation
 - Single-user local deployment assumption
 - Local file uploads stored under `uploads/` with random stored filenames
+- Single local login with HttpOnly cookie sessions
 
 ## Setup
 
@@ -32,6 +33,20 @@ npm run dev
 ```
 
 Vite proxies `/api` to `http://127.0.0.1:3001`. The default SQLite file is `data/mebox.sqlite`.
+
+## First-Run Login Setup
+
+MeBox has one local user and no registration flow. On first run, open the app and complete the setup screen. The frontend calls:
+
+```bash
+POST /api/auth/setup
+```
+
+with a local username and password. The backend refuses setup after the first user exists.
+
+After setup, use the login screen. Sessions are stored in an HttpOnly `SameSite=Lax` cookie, expire automatically, and are invalidated server-side on logout.
+
+There is no password reset, email flow, OAuth, external identity provider, or public account system. This login layer is not a replacement for Tailscale-only access; keep the app private to your Tailnet.
 
 ## Upload Limits
 
