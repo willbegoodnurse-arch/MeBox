@@ -9,6 +9,7 @@ Signal-like personal inbox app for self-hosted private notes, links, tasks, list
 - SQLite database via `better-sqlite3`
 - Zod request validation
 - Single-user local deployment assumption
+- Local file uploads stored under `uploads/` with random stored filenames
 
 ## Setup
 
@@ -32,12 +33,31 @@ npm run dev
 
 Vite proxies `/api` to `http://127.0.0.1:3001`. The default SQLite file is `data/mebox.sqlite`.
 
+## Upload Limits
+
+Uploaded files are private local inbox items. There is no public sharing route.
+
+- Maximum file size: 5 MB
+- Stored path: `uploads/`
+- Stored filename: random ID plus server-selected extension
+- Original filename: SQLite metadata only
+- Allowed MIME types:
+  - `image/jpeg`
+  - `image/png`
+  - `image/webp`
+  - `application/pdf`
+  - `text/plain`
+  - `text/markdown`
+- Dangerous executable/web extensions are rejected, including `.exe`, `.dll`, `.bat`, `.cmd`, `.ps1`, `.sh`, `.js`, `.mjs`, `.cjs`, `.html`, `.htm`, `.svg`, `.php`, and `.jar`.
+
 ## Validation
 
 ```bash
 npm run typecheck
 npm test
 npm run build
+npm run lint
+git diff --check
 ```
 
 ## Target

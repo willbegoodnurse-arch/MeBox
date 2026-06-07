@@ -1,6 +1,14 @@
 import Fastify from 'fastify'
 import type Database from 'better-sqlite3'
 import { listAlerts } from './alerts'
+import {
+  MAX_UPLOAD_BYTES,
+  UploadValidationError,
+  allowedMimeTypes,
+  listFileRows,
+  openStoredFile,
+  storeUpload,
+} from './files'
 import { getItem, listInboxItems, type ItemRow } from './items'
 import {
   announcementInputSchema,
@@ -15,6 +23,7 @@ import {
 
 type AppOptions = {
   db: Database.Database
+  uploadDir?: string
 }
 
 function parseBody<T>(schema: { parse: (value: unknown) => T }, body: unknown) {
@@ -33,12 +42,43 @@ function likeTerm(query: string) {
   return `%${escaped}%`
 }
 
-export function createApp({ db }: AppOptions) {
-  const app = Fastify({ logger: false })
+export function createApp({ db, uploadDir = 'uploads' }: AppOptions) {
+  const app = Fastify({ logger: false, bodyLimit: MAX_UPLOAD_BYTES })
+
+  app.addContentTypeParser(
+    [...allowedMimeTypes],
+    { parseAs: 'buffer' },
+    (_request, body, done) => {
+      done(null, body)
+    },
+  )
 
   app.setErrorHandler((error, _request, reply) => {
     if (typeof error === 'object' && error !== null && 'issues' in error) {
       reply.code(400).send({ error: 'Invalid request body' })
+      return
+    }
+
+    if (error instanceof UploadValidationError) {
+      reply.code(error.statusCode).send({ error: error.message })
+      return
+    }
+
+    const statusCode =
+      typeof error === 'object' &&
+      error !== null &&
+      'statusCode' in error &&
+      typeof error.statusCode === 'number'
+        ? error.statusCode
+        : undefined
+
+    if (statusCode === 413) {
+      reply.code(413).send({ error: 'File is too large' })
+      return
+    }
+
+    if (statusCode === 415) {
+      reply.code(415).send({ error: 'File type is not allowed' })
       return
     }
 
@@ -153,6 +193,51 @@ export function createApp({ db }: AppOptions) {
     })()
     reply.code(201)
     return { item: getItem(db, id) }
+  })
+
+  app.post('/api/items/files', async (request, reply) => {
+    if (!Buffer.isBuffer(request.body)) {
+      reply.code(400)
+      return { error: 'Invalid file' }
+    }
+
+    const id = storeUpload(db, uploadDir, {
+      originalName: request.headers['x-filename']?.toString(),
+      mimeType: request.headers['content-type'],
+      body: request.body,
+    })
+
+    reply.code(201)
+    return { item: getItem(db, id) }
+  })
+
+  app.get('/api/files', async () => ({
+    files: listFileRows(db).map((file) => ({
+      id: file.item_id,
+      originalName: file.original_name,
+      mimeType: file.mime_type,
+      sizeBytes: file.size_bytes,
+      downloadUrl: `/api/files/${file.item_id}`,
+    })),
+  }))
+
+  app.get('/api/files/:id', async (request, reply) => {
+    const id = Number((request.params as { id: string }).id)
+    if (!Number.isInteger(id) || id <= 0) {
+      reply.code(404)
+      return { error: 'File not found' }
+    }
+
+    const { row, stream } = openStoredFile(db, uploadDir, id)
+    reply.header('content-type', row.mime_type)
+    reply.header('content-length', row.size_bytes)
+    reply.header('x-content-type-options', 'nosniff')
+    reply.header('cache-control', 'no-store')
+    reply.header(
+      'content-disposition',
+      `attachment; filename*=UTF-8''${encodeURIComponent(row.original_name)}`,
+    )
+    return reply.send(stream)
   })
 
   app.get('/api/search', async (request) => {

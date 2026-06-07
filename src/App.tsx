@@ -27,7 +27,15 @@ type AlertItem = {
   detail?: string
 }
 
-type NavKey = 'inbox' | 'search' | 'more'
+type FileRecord = {
+  id: number
+  originalName: string
+  mimeType: string
+  sizeBytes: number
+  downloadUrl: string
+}
+
+type NavKey = 'inbox' | 'search' | 'more' | 'files'
 type CreateType =
   | 'note'
   | 'link'
@@ -81,12 +89,41 @@ async function apiFetch<T>(path: string, init?: RequestInit): Promise<T> {
   return response.json() as Promise<T>
 }
 
+async function uploadFile(file: File) {
+  const response = await fetch('/api/items/files', {
+    method: 'POST',
+    headers: {
+      'Content-Type': file.type,
+      'x-filename': file.name,
+    },
+    body: file,
+  })
+
+  if (!response.ok) {
+    throw new Error('Upload failed')
+  }
+
+  return response.json() as Promise<{ item: InboxItem }>
+}
+
 function asText(value: unknown) {
   return typeof value === 'string' ? value : ''
 }
 
 function asNumber(value: unknown) {
   return typeof value === 'number' ? value : 0
+}
+
+function formatBytes(value: number) {
+  if (value < 1024) {
+    return `${value} B`
+  }
+
+  if (value < 1024 * 1024) {
+    return `${Math.round(value / 1024)} KB`
+  }
+
+  return `${(value / 1024 / 1024).toFixed(1)} MB`
 }
 
 function formatDate(value: string | null | undefined) {
@@ -174,8 +211,11 @@ function ItemCard({ item }: { item: InboxItem }) {
         <>
           <strong>{asText(detail.originalName)}</strong>
           <span className="muted">
-            {asText(detail.mimeType)} · {Math.round(asNumber(detail.sizeBytes) / 1024)} KB
+            {asText(detail.mimeType)} · {formatBytes(asNumber(detail.sizeBytes))}
           </span>
+          <a className="download-link" href={`/api/files/${item.id}`}>
+            다운로드
+          </a>
         </>
       )}
 
@@ -218,17 +258,14 @@ function Alerts({ alerts }: { alerts: AlertItem[] }) {
   )
 }
 
-function Composer({
-  onCreated,
-}: {
-  onCreated: (item: InboxItem) => void
-}) {
+function Composer({ onCreated }: { onCreated: (item: InboxItem) => void }) {
   const [menuOpen, setMenuOpen] = useState(false)
   const [createType, setCreateType] = useState<CreateType>('note')
   const [draft, setDraft] = useState('')
   const [extra, setExtra] = useState('')
   const [amount, setAmount] = useState('')
   const [billingDay, setBillingDay] = useState('1')
+  const [selectedFile, setSelectedFile] = useState<File | null>(null)
   const [isSending, setIsSending] = useState(false)
   const [error, setError] = useState('')
 
@@ -236,15 +273,22 @@ function Composer({
 
   async function submit(event: FormEvent) {
     event.preventDefault()
-    if (createType === 'file') {
-      setError('파일 업로드는 다음 단계에서 연결됩니다.')
-      return
-    }
-
     setIsSending(true)
     setError('')
 
     try {
+      if (createType === 'file') {
+        if (!selectedFile) {
+          setError('업로드할 파일을 선택하세요.')
+          return
+        }
+
+        const response = await uploadFile(selectedFile)
+        onCreated(response.item)
+        setSelectedFile(null)
+        return
+      }
+
       let path = '/api/items/notes'
       let payload: Record<string, unknown> = { body: draft }
 
@@ -299,6 +343,9 @@ function Composer({
     }
   }
 
+  const canSend =
+    createType === 'file' ? selectedFile !== null : draft.trim().length > 0
+
   return (
     <form className="composer" onSubmit={submit}>
       {menuOpen && (
@@ -317,6 +364,22 @@ function Composer({
               {entry.label}
             </button>
           ))}
+        </div>
+      )}
+
+      {createType === 'file' && (
+        <div className="extra-fields">
+          <input
+            accept="image/jpeg,image/png,image/webp,application/pdf,text/plain,text/markdown"
+            aria-label="파일 선택"
+            onChange={(event) => setSelectedFile(event.target.files?.[0] ?? null)}
+            type="file"
+          />
+          {selectedFile && (
+            <span className="muted">
+              {selectedFile.name} · {formatBytes(selectedFile.size)}
+            </span>
+          )}
         </div>
       )}
 
@@ -390,10 +453,10 @@ function Composer({
           aria-label="나에게 입력"
           disabled={createType === 'file'}
           onChange={(event) => setDraft(event.target.value)}
-          placeholder={createType === 'file' ? '파일 업로드 TODO' : placeholder}
-          value={draft}
+          placeholder={createType === 'file' ? '파일 선택 후 보내기' : placeholder}
+          value={createType === 'file' ? selectedFile?.name ?? '' : draft}
         />
-        <button disabled={isSending || !draft.trim()} type="submit">
+        <button disabled={isSending || !canSend} type="submit">
           보내기
         </button>
       </div>
@@ -509,7 +572,7 @@ function SearchScreen() {
   )
 }
 
-function MoreScreen() {
+function MoreScreen({ onOpenFiles }: { onOpenFiles: () => void }) {
   return (
     <main className="screen">
       <header className="app-header compact">
@@ -520,12 +583,72 @@ function MoreScreen() {
       </header>
 
       <section className="more-grid">
-        {moreLinks.map((label) => (
-          <a href={`#${label.toLowerCase()}`} key={label}>
-            <span>{label}</span>
-            <span aria-hidden="true">›</span>
-          </a>
-        ))}
+        {moreLinks.map((label) =>
+          label === 'Files' ? (
+            <button className="more-link" key={label} onClick={onOpenFiles} type="button">
+              <span>{label}</span>
+              <span aria-hidden="true">›</span>
+            </button>
+          ) : (
+            <a href={`#${label.toLowerCase()}`} key={label}>
+              <span>{label}</span>
+              <span aria-hidden="true">›</span>
+            </a>
+          ),
+        )}
+      </section>
+    </main>
+  )
+}
+
+function FilesScreen({ onBack }: { onBack: () => void }) {
+  const [files, setFiles] = useState<FileRecord[]>([])
+  const [error, setError] = useState('')
+
+  async function refreshFiles() {
+    try {
+      const response = await apiFetch<{ files: FileRecord[] }>('/api/files')
+      setFiles(response.files)
+      setError('')
+    } catch {
+      setError('파일 목록을 불러오지 못했습니다.')
+    }
+  }
+
+  useEffect(() => {
+    void Promise.resolve().then(refreshFiles)
+  }, [])
+
+  return (
+    <main className="screen">
+      <header className="app-header compact">
+        <div>
+          <span className="eyebrow">Files</span>
+          <h1>파일</h1>
+        </div>
+        <button className="secondary-button" onClick={onBack} type="button">
+          뒤로
+        </button>
+      </header>
+
+      {error && <p className="form-error">{error}</p>}
+
+      <section className="file-list">
+        {files.length ? (
+          files.map((file) => (
+            <a className="file-row" href={file.downloadUrl} key={file.id}>
+              <span>
+                <strong>{file.originalName}</strong>
+                <small>
+                  {file.mimeType} · {formatBytes(file.sizeBytes)}
+                </small>
+              </span>
+              <span aria-hidden="true">↓</span>
+            </a>
+          ))
+        ) : (
+          <div className="empty-state">저장된 파일이 없습니다.</div>
+        )}
       </section>
     </main>
   )
@@ -559,8 +682,11 @@ function App() {
     if (activeNav === 'search') {
       return <SearchScreen />
     }
+    if (activeNav === 'files') {
+      return <FilesScreen onBack={() => setActiveNav('more')} />
+    }
     if (activeNav === 'more') {
-      return <MoreScreen />
+      return <MoreScreen onOpenFiles={() => setActiveNav('files')} />
     }
     return (
       <InboxScreen
@@ -598,7 +724,7 @@ function App() {
           검색
         </button>
         <button
-          className={activeNav === 'more' ? 'active' : ''}
+          className={activeNav === 'more' || activeNav === 'files' ? 'active' : ''}
           onClick={() => setActiveNav('more')}
           type="button"
         >
