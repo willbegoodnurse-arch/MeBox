@@ -38,6 +38,12 @@ export function initializeSchema(db: Database.Database) {
       revoked_at TEXT
     );
 
+    CREATE TABLE IF NOT EXISTS app_settings (
+      key TEXT PRIMARY KEY,
+      value TEXT NOT NULL,
+      updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+
     CREATE TABLE IF NOT EXISTS links (
       item_id INTEGER PRIMARY KEY REFERENCES items(id) ON DELETE CASCADE,
       url TEXT NOT NULL,

@@ -9,6 +9,7 @@ import { initializeSchema } from './db/schema'
 import { listAlerts, nextBillingDate } from './alerts'
 import { MAX_UPLOAD_BYTES } from './files'
 import { createFirstUser, createSession } from './auth'
+import { decryptExport } from './data'
 
 function testDb() {
   const db = new Database(':memory:')
@@ -491,4 +492,271 @@ test('expired session is rejected', async () => {
   assert.equal(response.statusCode, 401)
 
   await closeTestApp(app, db)
+})
+
+test('change password succeeds with current password', async () => {
+  const db = testDb()
+  const app = createApp({ db })
+  const cookie = await authCookie(app)
+
+  const response = await app.inject({
+    method: 'POST',
+    url: '/api/auth/change-password',
+    headers: { cookie },
+    payload: {
+      currentPassword: 'correct horse battery staple',
+      newPassword: 'new correct horse battery staple',
+    },
+  })
+
+  assert.equal(response.statusCode, 200)
+  assert.equal(response.json().ok, true)
+  assert.equal(JSON.stringify(response.json()).includes('password'), false)
+
+  await closeTestApp(app, db)
+})
+
+test('change password fails with wrong current password', async () => {
+  const db = testDb()
+  const app = createApp({ db })
+  const cookie = await authCookie(app)
+
+  const response = await app.inject({
+    method: 'POST',
+    url: '/api/auth/change-password',
+    headers: { cookie },
+    payload: {
+      currentPassword: 'wrong password',
+      newPassword: 'new correct horse battery staple',
+    },
+  })
+
+  assert.equal(response.statusCode, 401)
+  assert.deepEqual(response.json(), { error: 'Invalid password' })
+
+  await closeTestApp(app, db)
+})
+
+test('old password no longer works and new password works after change', async () => {
+  const db = testDb()
+  const app = createApp({ db })
+  const cookie = await authCookie(app)
+
+  await app.inject({
+    method: 'POST',
+    url: '/api/auth/change-password',
+    headers: { cookie },
+    payload: {
+      currentPassword: 'correct horse battery staple',
+      newPassword: 'new correct horse battery staple',
+    },
+  })
+  const oldLogin = await app.inject({
+    method: 'POST',
+    url: '/api/auth/login',
+    payload: { password: 'correct horse battery staple' },
+  })
+  const newLogin = await app.inject({
+    method: 'POST',
+    url: '/api/auth/login',
+    payload: { password: 'new correct horse battery staple' },
+  })
+
+  assert.equal(oldLogin.statusCode, 401)
+  assert.equal(newLogin.statusCode, 200)
+
+  await closeTestApp(app, db)
+})
+
+test('plain export excludes password hashes and sessions', async () => {
+  const db = testDb()
+  const app = createApp({ db })
+  const cookie = await authCookie(app)
+
+  await app.inject({
+    method: 'POST',
+    url: '/api/items/notes',
+    headers: { cookie },
+    payload: { body: 'exported note' },
+  })
+  const response = await app.inject({
+    method: 'POST',
+    url: '/api/data/export',
+    headers: { cookie },
+    payload: { format: 'plain' },
+  })
+
+  assert.equal(response.statusCode, 200)
+  assert.equal(response.payload.includes('exported note'), true)
+  assert.equal(response.payload.includes('password_hash'), false)
+  assert.equal(response.payload.includes('sessions'), false)
+
+  await closeTestApp(app, db)
+})
+
+test('encrypted export does not contain plaintext JSON and can be decrypted', async () => {
+  const db = testDb()
+  const app = createApp({ db })
+  const cookie = await authCookie(app)
+  const password = 'export password'
+
+  await app.inject({
+    method: 'POST',
+    url: '/api/items/notes',
+    headers: { cookie },
+    payload: { body: 'private exported note' },
+  })
+  const response = await app.inject({
+    method: 'POST',
+    url: '/api/data/export',
+    headers: { cookie },
+    payload: { format: 'encrypted', password },
+  })
+  const encrypted = response.json()
+  const decrypted = decryptExport(encrypted, password)
+
+  assert.equal(response.statusCode, 200)
+  assert.equal(response.payload.includes('private exported note'), false)
+  assert.equal(response.payload.includes('"items"'), false)
+  assert.equal(decrypted.tables.items.length, 1)
+  assert.equal(decrypted.tables.items[0].body, 'private exported note')
+
+  await closeTestApp(app, db)
+})
+
+test('import rejects invalid JSON payload', async () => {
+  const db = testDb()
+  const app = createApp({ db })
+  const cookie = await authCookie(app)
+
+  const response = await app.inject({
+    method: 'POST',
+    url: '/api/data/import',
+    headers: { cookie },
+    payload: { format: 'plain', payload: 'not json' },
+  })
+
+  assert.equal(response.statusCode, 400)
+  assert.deepEqual(response.json(), { error: 'Invalid import file' })
+
+  await closeTestApp(app, db)
+})
+
+test('import rejects malformed encrypted payload', async () => {
+  const db = testDb()
+  const app = createApp({ db })
+  const cookie = await authCookie(app)
+
+  const response = await app.inject({
+    method: 'POST',
+    url: '/api/data/import',
+    headers: { cookie },
+    payload: {
+      format: 'encrypted',
+      password: 'import password',
+      payload: { format: 'mebox-encrypted-json' },
+    },
+  })
+
+  assert.equal(response.statusCode, 400)
+  assert.equal(response.json().error.length > 0, true)
+
+  await closeTestApp(app, db)
+})
+
+test('settings default reminder advance can be read and updated', async () => {
+  const db = testDb()
+  const app = createApp({ db })
+  const cookie = await authCookie(app)
+
+  const readResponse = await app.inject({
+    url: '/api/settings',
+    headers: { cookie },
+  })
+  const updateResponse = await app.inject({
+    method: 'PATCH',
+    url: '/api/settings',
+    headers: { cookie },
+    payload: { defaultReminderAdvanceMinutes: 60 },
+  })
+  const rereadResponse = await app.inject({
+    url: '/api/settings',
+    headers: { cookie },
+  })
+
+  assert.equal(readResponse.statusCode, 200)
+  assert.equal(readResponse.json().defaultReminderAdvanceMinutes, 15)
+  assert.equal(updateResponse.statusCode, 200)
+  assert.equal(updateResponse.json().defaultReminderAdvanceMinutes, 60)
+  assert.equal(rereadResponse.json().defaultReminderAdvanceMinutes, 60)
+
+  await closeTestApp(app, db)
+})
+
+test('delete account requires DELETE confirmation', async () => {
+  const db = testDb()
+  const app = createApp({ db })
+  const cookie = await authCookie(app)
+
+  const response = await app.inject({
+    method: 'POST',
+    url: '/api/auth/delete-account',
+    headers: { cookie },
+    payload: { confirmation: 'delete' },
+  })
+
+  assert.equal(response.statusCode, 400)
+  assert.equal(tableCount(db, 'users'), 1)
+
+  await closeTestApp(app, db)
+})
+
+test('delete account clears sessions, users, and app data within app scope', async () => {
+  const db = testDb()
+  const uploadDir = testUploadDir()
+  const app = createApp({ db, uploadDir })
+  const cookie = await authCookie(app)
+
+  await app.inject({
+    method: 'POST',
+    url: '/api/items/notes',
+    headers: { cookie },
+    payload: { body: 'delete me' },
+  })
+  await app.inject({
+    method: 'PATCH',
+    url: '/api/settings',
+    headers: { cookie },
+    payload: { defaultReminderAdvanceMinutes: 30 },
+  })
+  const upload = await app.inject(
+    uploadRequest({
+      filename: 'delete.txt',
+      mimeType: 'text/plain',
+      body: Buffer.from('delete file'),
+      cookie,
+    }),
+  )
+  const storedName = (
+    db.prepare('SELECT stored_name FROM files').get() as { stored_name: string }
+  ).stored_name
+  assert.equal(upload.statusCode, 201)
+  assert.equal(existsSync(join(uploadDir, storedName)), true)
+
+  const response = await app.inject({
+    method: 'POST',
+    url: '/api/auth/delete-account',
+    headers: { cookie },
+    payload: { confirmation: 'DELETE' },
+  })
+
+  assert.equal(response.statusCode, 200)
+  assert.equal(tableCount(db, 'users'), 0)
+  assert.equal(tableCount(db, 'sessions'), 0)
+  assert.equal(tableCount(db, 'items'), 0)
+  assert.equal(tableCount(db, 'app_settings'), 0)
+  assert.equal(existsSync(join(uploadDir, storedName)), false)
+
+  await closeTestApp(app, db)
+  rmSync(uploadDir, { recursive: true, force: true })
 })

@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState, type FormEvent } from 'react'
+import { useEffect, useState, type FormEvent, type ReactNode } from 'react'
 import './App.css'
 
 type ItemType =
@@ -27,22 +27,30 @@ type AlertItem = {
   detail?: string
 }
 
-type FileRecord = {
-  id: number
-  originalName: string
-  mimeType: string
-  sizeBytes: number
-  downloadUrl: string
-}
+type AuthUser = { id: number; username: string }
 
 type AuthResponse = {
   authenticated: boolean
   setupRequired: boolean
-  user: { id: number; username: string } | null
+  user: AuthUser | null
+}
+
+type SettingsResponse = {
+  user: AuthUser | null
+  version: string
+  defaultReminderAdvanceMinutes: number
+  reminderAdvanceOptions: number[]
 }
 
 type AuthView = 'loading' | 'setup' | 'login' | 'authenticated'
-type NavKey = 'inbox' | 'search' | 'more' | 'files'
+type NavKey = 'inbox' | 'search' | 'settings'
+type SettingsView =
+  | 'home'
+  | 'changePassword'
+  | 'exportData'
+  | 'importData'
+  | 'reminder'
+  | 'deleteAccount'
 type CreateType =
   | 'note'
   | 'link'
@@ -66,18 +74,20 @@ const searchTypes: { type: ItemType | 'all'; label: string }[] = [
   { type: 'all', label: '전체' },
   { type: 'note', label: '메모' },
   { type: 'link', label: '링크' },
-  { type: 'announcement', label: '공지' },
+  { type: 'todo', label: '할일' },
   { type: 'file', label: '파일' },
+  { type: 'announcement', label: '공지' },
+  { type: 'recurring_expense', label: '지출' },
 ]
 
-const moreLinks = [
-  'Links',
-  'Tasks',
-  'Lists',
-  'Files',
-  'Announcements',
-  'Money',
-  'Settings',
+const reminderOptions = [
+  { label: 'At event time', value: 0 },
+  { label: '5 minutes', value: 5 },
+  { label: '15 minutes', value: 15 },
+  { label: '30 minutes', value: 30 },
+  { label: '1 hour', value: 60 },
+  { label: '2 hours', value: 120 },
+  { label: '1 day', value: 1440 },
 ]
 
 async function apiFetch<T>(path: string, init?: RequestInit): Promise<T> {
@@ -135,19 +145,6 @@ function formatBytes(value: number) {
   return `${(value / 1024 / 1024).toFixed(1)} MB`
 }
 
-function formatDate(value: string | null | undefined) {
-  if (!value) {
-    return ''
-  }
-
-  return new Intl.DateTimeFormat('ko-KR', {
-    month: 'short',
-    day: 'numeric',
-    hour: '2-digit',
-    minute: '2-digit',
-  }).format(new Date(value))
-}
-
 function typeLabel(type: ItemType) {
   switch (type) {
     case 'note':
@@ -167,85 +164,61 @@ function typeLabel(type: ItemType) {
   }
 }
 
-function ItemCard({ item }: { item: InboxItem }) {
-  const detail = item.detail ?? {}
+function dateTitle(value: string) {
+  const date = new Date(value)
+  const today = new Date()
+  const yesterday = new Date()
+  yesterday.setDate(today.getDate() - 1)
 
-  return (
-    <article className={`item-card item-${item.type}`}>
-      <div className="card-meta">
-        <span>{typeLabel(item.type)}</span>
-        <time>{formatDate(item.createdAt)}</time>
-      </div>
+  if (date.toDateString() === today.toDateString()) {
+    return '오늘'
+  }
 
-      {item.type === 'note' && <p>{asText(detail.text)}</p>}
+  if (date.toDateString() === yesterday.toDateString()) {
+    return '어제'
+  }
 
-      {item.type === 'link' && (
-        <>
-          <strong>{asText(detail.title) || asText(detail.url)}</strong>
-          <p>{asText(detail.memo)}</p>
-          <span className="muted">{asText(detail.url)}</span>
-        </>
-      )}
+  return new Intl.DateTimeFormat('ko-KR', {
+    month: 'long',
+    day: 'numeric',
+    weekday: 'short',
+  }).format(date)
+}
 
-      {item.type === 'todo' && (
-        <>
-          <strong>{asText(detail.title)}</strong>
-          <span className="muted">
-            {asText(detail.completedAt) ? '완료됨' : '미완료'}
-            {asText(detail.dueAt) && ` · ${formatDate(asText(detail.dueAt))}`}
-          </span>
-        </>
-      )}
+function timeText(value: string) {
+  return new Intl.DateTimeFormat('ko-KR', {
+    hour: '2-digit',
+    minute: '2-digit',
+  }).format(new Date(value))
+}
 
-      {item.type === 'list' && (
-        <>
-          <strong>{asText(detail.title)}</strong>
-          <ul className="check-list">
-            {(Array.isArray(detail.items) ? detail.items : []).slice(0, 5).map((row) => {
-              const listItem = row as Record<string, unknown>
-              return (
-                <li key={String(listItem.id)}>
-                  <span aria-hidden="true">
-                    {asText(listItem.completedAt) ? '✓' : '□'}
-                  </span>
-                  {asText(listItem.text)}
-                </li>
-              )
-            })}
-          </ul>
-        </>
-      )}
+function groupItems(items: InboxItem[]) {
+  const groups: { title: string; items: InboxItem[] }[] = []
 
-      {item.type === 'file' && (
-        <>
-          <strong>{asText(detail.originalName)}</strong>
-          <span className="muted">
-            {asText(detail.mimeType)} · {formatBytes(asNumber(detail.sizeBytes))}
-          </span>
-          <a className="download-link" href={`/api/files/${item.id}`}>
-            다운로드
-          </a>
-        </>
-      )}
+  for (const item of items) {
+    const title = dateTitle(item.createdAt)
+    const group = groups.find((entry) => entry.title === title)
 
-      {item.type === 'announcement' && (
-        <>
-          <strong>{asText(detail.title) || '공지'}</strong>
-          <p>{asText(detail.body)}</p>
-        </>
-      )}
+    if (group) {
+      group.items.push(item)
+    } else {
+      groups.push({ title, items: [item] })
+    }
+  }
 
-      {item.type === 'recurring_expense' && (
-        <>
-          <strong>{asText(detail.name)}</strong>
-          <span className="muted">
-            {asText(detail.currency)} {asNumber(detail.amount).toLocaleString()} · 매월{' '}
-            {asNumber(detail.billingDay)}일
-          </span>
-        </>
-      )}
-    </article>
-  )
+  return groups
+}
+
+function downloadJson(filename: string, payload: unknown) {
+  const blob = new Blob([JSON.stringify(payload, null, 2)], {
+    type: 'application/json',
+  })
+  const url = URL.createObjectURL(blob)
+  const link = document.createElement('a')
+  link.href = url
+  link.download = filename
+  link.click()
+  URL.revokeObjectURL(url)
 }
 
 function AuthScreen({
@@ -253,7 +226,7 @@ function AuthScreen({
   onAuthenticated,
 }: {
   mode: 'setup' | 'login'
-  onAuthenticated: () => void
+  onAuthenticated: (user: AuthUser | null) => void
 }) {
   const [username, setUsername] = useState('local')
   const [password, setPassword] = useState('')
@@ -266,7 +239,7 @@ function AuthScreen({
     setError('')
 
     try {
-      await apiFetch<AuthResponse>(
+      const response = await apiFetch<AuthResponse>(
         mode === 'setup' ? '/api/auth/setup' : '/api/auth/login',
         {
           method: 'POST',
@@ -276,7 +249,7 @@ function AuthScreen({
         },
       )
       setPassword('')
-      onAuthenticated()
+      onAuthenticated(response.user)
     } catch {
       setError(mode === 'setup' ? '설정을 완료하지 못했습니다.' : '로그인할 수 없습니다.')
     } finally {
@@ -287,27 +260,32 @@ function AuthScreen({
   return (
     <main className="auth-screen">
       <form className="auth-panel" onSubmit={submit}>
-        <span className="eyebrow">MeBox</span>
-        <h1>{mode === 'setup' ? '첫 설정' : '로그인'}</h1>
+        <div>
+          <span className="auth-mark">MeBox</span>
+          <h1>{mode === 'setup' ? '첫 설정' : '로그인'}</h1>
+          <p>개인 Tailnet 안에서 쓰는 나와의 인박스</p>
+        </div>
 
         {mode === 'setup' && (
-          <input
-            aria-label="사용자 이름"
-            autoComplete="username"
-            onChange={(event) => setUsername(event.target.value)}
-            placeholder="사용자 이름"
-            value={username}
-          />
+          <label>
+            사용자 이름
+            <input
+              autoComplete="username"
+              onChange={(event) => setUsername(event.target.value)}
+              value={username}
+            />
+          </label>
         )}
 
-        <input
-          aria-label="비밀번호"
-          autoComplete={mode === 'setup' ? 'new-password' : 'current-password'}
-          onChange={(event) => setPassword(event.target.value)}
-          placeholder="비밀번호"
-          type="password"
-          value={password}
-        />
+        <label>
+          비밀번호
+          <input
+            autoComplete={mode === 'setup' ? 'new-password' : 'current-password'}
+            onChange={(event) => setPassword(event.target.value)}
+            type="password"
+            value={password}
+          />
+        </label>
 
         {error && <p className="form-error">{error}</p>}
 
@@ -319,26 +297,147 @@ function AuthScreen({
   )
 }
 
-function Alerts({ alerts }: { alerts: AlertItem[] }) {
-  if (!alerts.length) {
-    return null
+function MessageBubble({ item }: { item: InboxItem }) {
+  const detail = item.detail ?? {}
+
+  return (
+    <article className={`message-bubble message-${item.type}`}>
+      <div className="message-label">
+        <span>{typeLabel(item.type)}</span>
+        <time>{timeText(item.createdAt)}</time>
+      </div>
+
+      {item.type === 'note' && <p className="message-text">{asText(detail.text)}</p>}
+
+      {item.type === 'link' && (
+        <div className="message-stack">
+          <strong>{asText(detail.title) || asText(detail.url)}</strong>
+          {asText(detail.memo) && <p>{asText(detail.memo)}</p>}
+          <span className="message-url">{asText(detail.url)}</span>
+        </div>
+      )}
+
+      {item.type === 'todo' && (
+        <div className="todo-line">
+          <span className="fake-check" aria-hidden="true">
+            {asText(detail.completedAt) ? '✓' : ''}
+          </span>
+          <span>{asText(detail.title)}</span>
+        </div>
+      )}
+
+      {item.type === 'list' && (
+        <div className="message-stack">
+          <strong>{asText(detail.title)}</strong>
+          <ul className="mini-list">
+            {(Array.isArray(detail.items) ? detail.items : []).slice(0, 4).map((row) => {
+              const listItem = row as Record<string, unknown>
+              return (
+                <li key={String(listItem.id)}>
+                  <span aria-hidden="true">{asText(listItem.completedAt) ? '✓' : '□'}</span>
+                  {asText(listItem.text)}
+                </li>
+              )
+            })}
+          </ul>
+        </div>
+      )}
+
+      {item.type === 'file' && (
+        <a className="attachment-line" href={`/api/files/${item.id}`}>
+          <span className="attachment-icon" aria-hidden="true">
+            ↓
+          </span>
+          <span>
+            <strong>{asText(detail.originalName)}</strong>
+            <small>
+              {asText(detail.mimeType)} · {formatBytes(asNumber(detail.sizeBytes))}
+            </small>
+          </span>
+        </a>
+      )}
+
+      {item.type === 'announcement' && (
+        <div className="message-stack">
+          <strong>{asText(detail.title) || '공지'}</strong>
+          <p>{asText(detail.body)}</p>
+        </div>
+      )}
+
+      {item.type === 'recurring_expense' && (
+        <div className="message-stack">
+          <strong>{asText(detail.name)}</strong>
+          <span>
+            {asText(detail.currency)} {asNumber(detail.amount).toLocaleString()} · 매월{' '}
+            {asNumber(detail.billingDay)}일
+          </span>
+        </div>
+      )}
+    </article>
+  )
+}
+
+function Timeline({ items }: { items: InboxItem[] }) {
+  if (!items.length) {
+    return <div className="empty-thread">아직 아무 것도 없습니다. 첫 메모를 보내세요.</div>
   }
 
   return (
-    <section className="alerts" aria-label="내부 알림">
-      {alerts.map((alert) => (
-        <div className="alert-pill" key={`${alert.type}-${alert.id}`}>
-          <strong>{alert.title}</strong>
-          <span>
-            {alert.severity === 'overdue' ? '지남' : '곧 예정'} · {alert.dueOn}
-          </span>
+    <section className="timeline" aria-label="인박스 타임라인">
+      {groupItems(items).map((group) => (
+        <div className="day-group" key={group.title}>
+          <div className="day-divider">{group.title}</div>
+          {group.items.map((item) => (
+            <MessageBubble item={item} key={item.id} />
+          ))}
         </div>
       ))}
     </section>
   )
 }
 
-function Composer({ onCreated }: { onCreated: (item: InboxItem) => void }) {
+function Header({
+  alerts,
+  onSearch,
+}: {
+  alerts: AlertItem[]
+  onSearch: () => void
+}) {
+  return (
+    <header className="chat-header">
+      <div>
+        <h1>MeBox</h1>
+        <p>{alerts.length ? `${alerts.length}개 알림` : '개인 인박스'}</p>
+      </div>
+      <button aria-label="검색 열기" className="icon-button" onClick={onSearch} type="button">
+        ⌕
+      </button>
+    </header>
+  )
+}
+
+function AlertStrip({ alerts }: { alerts: AlertItem[] }) {
+  if (!alerts.length) {
+    return null
+  }
+
+  return (
+    <section className="alert-strip" aria-label="내부 알림">
+      {alerts.map((alert) => (
+        <div className="alert-chip" key={`${alert.type}-${alert.id}`}>
+          <strong>{alert.title}</strong>
+          <span>{alert.severity === 'overdue' ? '지남' : '곧 예정'}</span>
+        </div>
+      ))}
+    </section>
+  )
+}
+
+function Composer({
+  onCreated,
+}: {
+  onCreated: (item: InboxItem) => void
+}) {
   const [menuOpen, setMenuOpen] = useState(false)
   const [createType, setCreateType] = useState<CreateType>('note')
   const [draft, setDraft] = useState('')
@@ -349,7 +448,18 @@ function Composer({ onCreated }: { onCreated: (item: InboxItem) => void }) {
   const [isSending, setIsSending] = useState(false)
   const [error, setError] = useState('')
 
-  const placeholder = createType === 'note' ? '나에게 입력...' : `${typeLabel(createType)} 입력...`
+  const isNote = createType === 'note'
+  const placeholder = isNote ? '나에게 입력...' : `${typeLabel(createType)} 입력...`
+  const canSend = createType === 'file' ? selectedFile !== null : draft.trim().length > 0
+
+  function resetComposer() {
+    setDraft('')
+    setExtra('')
+    setAmount('')
+    setBillingDay('1')
+    setSelectedFile(null)
+    setCreateType('note')
+  }
 
   async function submit(event: FormEvent) {
     event.preventDefault()
@@ -359,13 +469,12 @@ function Composer({ onCreated }: { onCreated: (item: InboxItem) => void }) {
     try {
       if (createType === 'file') {
         if (!selectedFile) {
-          setError('업로드할 파일을 선택하세요.')
+          setError('파일을 선택하세요.')
           return
         }
-
         const response = await uploadFile(selectedFile)
         onCreated(response.item)
-        setSelectedFile(null)
+        resetComposer()
         return
       }
 
@@ -375,12 +484,10 @@ function Composer({ onCreated }: { onCreated: (item: InboxItem) => void }) {
       if (createType === 'link') {
         path = '/api/items/links'
         payload = { url: draft, title: extra || undefined }
-      }
-      if (createType === 'todo') {
+      } else if (createType === 'todo') {
         path = '/api/items/todos'
         payload = { title: draft, dueAt: extra ? new Date(extra).toISOString() : undefined }
-      }
-      if (createType === 'list') {
+      } else if (createType === 'list') {
         path = '/api/items/lists'
         payload = {
           title: draft,
@@ -390,12 +497,10 @@ function Composer({ onCreated }: { onCreated: (item: InboxItem) => void }) {
             .filter(Boolean)
             .map((text) => ({ text })),
         }
-      }
-      if (createType === 'announcement') {
+      } else if (createType === 'announcement') {
         path = '/api/items/announcements'
         payload = { title: extra || undefined, body: draft, pinned: true }
-      }
-      if (createType === 'recurring_expense') {
+      } else if (createType === 'recurring_expense') {
         path = '/api/items/recurring-expenses'
         payload = {
           name: draft,
@@ -410,26 +515,19 @@ function Composer({ onCreated }: { onCreated: (item: InboxItem) => void }) {
         method: 'POST',
         body: JSON.stringify(payload),
       })
-
       onCreated(response.item)
-      setDraft('')
-      setExtra('')
-      setAmount('')
-      setBillingDay('1')
+      resetComposer()
     } catch {
-      setError('저장하지 못했습니다. 입력값과 로컬 서버를 확인하세요.')
+      setError('저장하지 못했습니다.')
     } finally {
       setIsSending(false)
     }
   }
 
-  const canSend =
-    createType === 'file' ? selectedFile !== null : draft.trim().length > 0
-
   return (
     <form className="composer" onSubmit={submit}>
       {menuOpen && (
-        <div className="create-menu">
+        <div className="create-sheet" aria-label="생성 메뉴">
           {createTypes.map((entry) => (
             <button
               className={entry.type === createType ? 'selected' : ''}
@@ -447,25 +545,17 @@ function Composer({ onCreated }: { onCreated: (item: InboxItem) => void }) {
         </div>
       )}
 
-      {createType === 'file' && (
-        <div className="extra-fields">
-          <input
-            accept="image/jpeg,image/png,image/webp,application/pdf,text/plain,text/markdown"
-            aria-label="파일 선택"
-            onChange={(event) => setSelectedFile(event.target.files?.[0] ?? null)}
-            type="file"
-          />
-          {selectedFile && (
-            <span className="muted">
-              {selectedFile.name} · {formatBytes(selectedFile.size)}
-            </span>
-          )}
-        </div>
-      )}
-
-      {createType !== 'note' && createType !== 'file' && (
-        <div className="extra-fields">
-          {createType === 'todo' ? (
+      {!isNote && (
+        <div className="detail-tray">
+          <span>{typeLabel(createType)}</span>
+          {createType === 'file' ? (
+            <input
+              accept="image/jpeg,image/png,image/webp,application/pdf,text/plain,text/markdown"
+              aria-label="파일 선택"
+              onChange={(event) => setSelectedFile(event.target.files?.[0] ?? null)}
+              type="file"
+            />
+          ) : createType === 'todo' ? (
             <input
               aria-label="마감일"
               onChange={(event) => setExtra(event.target.value)}
@@ -477,26 +567,17 @@ function Composer({ onCreated }: { onCreated: (item: InboxItem) => void }) {
               aria-label="리스트 항목"
               onChange={(event) => setExtra(event.target.value)}
               placeholder="항목을 줄마다 입력"
-              rows={3}
+              rows={2}
               value={extra}
             />
-          ) : (
-            <input
-              aria-label="추가 정보"
-              onChange={(event) => setExtra(event.target.value)}
-              placeholder={
-                createType === 'link'
-                  ? '제목'
-                  : createType === 'announcement'
-                    ? '제목'
-                    : 'KRW'
-              }
-              value={extra}
-            />
-          )}
-
-          {createType === 'recurring_expense' && (
+          ) : createType === 'recurring_expense' ? (
             <div className="split-fields">
+              <input
+                aria-label="통화"
+                onChange={(event) => setExtra(event.target.value)}
+                placeholder="KRW"
+                value={extra}
+              />
               <input
                 aria-label="금액"
                 inputMode="decimal"
@@ -514,11 +595,18 @@ function Composer({ onCreated }: { onCreated: (item: InboxItem) => void }) {
                 value={billingDay}
               />
             </div>
+          ) : (
+            <input
+              aria-label="추가 정보"
+              onChange={(event) => setExtra(event.target.value)}
+              placeholder="제목"
+              value={extra}
+            />
           )}
         </div>
       )}
 
-      {error && <p className="form-error">{error}</p>}
+      {error && <p className="composer-error">{error}</p>}
 
       <div className="composer-row">
         <button
@@ -533,10 +621,10 @@ function Composer({ onCreated }: { onCreated: (item: InboxItem) => void }) {
           aria-label="나에게 입력"
           disabled={createType === 'file'}
           onChange={(event) => setDraft(event.target.value)}
-          placeholder={createType === 'file' ? '파일 선택 후 보내기' : placeholder}
+          placeholder={createType === 'file' ? selectedFile?.name ?? '파일 선택' : placeholder}
           value={createType === 'file' ? selectedFile?.name ?? '' : draft}
         />
-        <button disabled={isSending || !canSend} type="submit">
+        <button className="send-button" disabled={isSending || !canSend} type="submit">
           보내기
         </button>
       </div>
@@ -548,33 +636,20 @@ function InboxScreen({
   alerts,
   items,
   onCreated,
+  onSearch,
 }: {
   alerts: AlertItem[]
   items: InboxItem[]
   onCreated: (item: InboxItem) => void
+  onSearch: () => void
 }) {
   return (
     <>
       <main className="screen inbox-screen">
-        <header className="app-header">
-          <div>
-            <span className="eyebrow">MeBox</span>
-            <h1>나와의 인박스</h1>
-          </div>
-          <span className="status-dot">로컬</span>
-        </header>
-
-        <Alerts alerts={alerts} />
-
-        <section className="timeline" aria-label="인박스 타임라인">
-          {items.length ? (
-            items.map((item) => <ItemCard item={item} key={item.id} />)
-          ) : (
-            <div className="empty-state">첫 메모를 남겨보세요.</div>
-          )}
-        </section>
+        <Header alerts={alerts} onSearch={onSearch} />
+        <AlertStrip alerts={alerts} />
+        <Timeline items={items} />
       </main>
-
       <Composer onCreated={onCreated} />
     </>
   )
@@ -610,22 +685,15 @@ function SearchScreen() {
   }
 
   return (
-    <main className="screen">
-      <header className="app-header compact">
-        <div>
-          <span className="eyebrow">검색</span>
-          <h1>필요한 것 찾기</h1>
-        </div>
-      </header>
-
+    <main className="screen plain-screen">
       <form className="search-box" onSubmit={runSearch}>
         <input
           aria-label="검색어"
+          autoFocus
           onChange={(event) => setQuery(event.target.value)}
-          placeholder="키워드 검색"
+          placeholder="검색"
           value={query}
         />
-        <button type="submit">검색</button>
       </form>
 
       <div className="filter-row" aria-label="타입 필터">
@@ -643,104 +711,547 @@ function SearchScreen() {
 
       {error && <p className="form-error">{error}</p>}
 
-      <section className="timeline search-results">
+      <section className="search-results" aria-label="검색 결과">
         {items.map((item) => (
-          <ItemCard item={item} key={item.id} />
+          <MessageBubble item={item} key={item.id} />
         ))}
       </section>
     </main>
   )
 }
 
-function MoreScreen({
-  onLogout,
-  onOpenFiles,
+function Section({
+  children,
+  title,
 }: {
-  onLogout: () => void
-  onOpenFiles: () => void
+  children: ReactNode
+  title: string
 }) {
   return (
-    <main className="screen">
-      <header className="app-header compact">
-        <div>
-          <span className="eyebrow">더보기</span>
-          <h1>보관함</h1>
-        </div>
+    <section className="settings-section">
+      <h2>{title}</h2>
+      <div className="settings-list">{children}</div>
+    </section>
+  )
+}
+
+function SettingsRow({
+  children,
+  danger = false,
+  onClick,
+  title,
+  value,
+}: {
+  children?: React.ReactNode
+  danger?: boolean
+  onClick?: () => void
+  title: string
+  value?: string
+}) {
+  if (!onClick) {
+    return (
+      <div className="settings-row">
+        <span>{title}</span>
+        {value && <small>{value}</small>}
+        {children}
+      </div>
+    )
+  }
+
+  return (
+    <button
+      className={`settings-row ${danger ? 'danger-row' : ''}`}
+      onClick={onClick}
+      type="button"
+    >
+      <span>{title}</span>
+      {value && <small>{value}</small>}
+    </button>
+  )
+}
+
+function SettingsHome({
+  onLogout,
+  onOpen,
+  settings,
+  user,
+}: {
+  onLogout: () => void
+  onOpen: (view: SettingsView) => void
+  settings: SettingsResponse | null
+  user: AuthUser | null
+}) {
+  return (
+    <main className="screen plain-screen">
+      <header className="section-header">
+        <h1>설정</h1>
+        <p>계정, 데이터, 알림</p>
       </header>
 
-      <section className="more-grid">
-        {moreLinks.map((label) =>
-          label === 'Files' ? (
-            <button className="more-link" key={label} onClick={onOpenFiles} type="button">
-              <span>{label}</span>
-              <span aria-hidden="true">›</span>
-            </button>
-          ) : (
-            <a href={`#${label.toLowerCase()}`} key={label}>
-              <span>{label}</span>
-              <span aria-hidden="true">›</span>
-            </a>
-          ),
-        )}
-        <button className="more-link danger-link" onClick={onLogout} type="button">
-          <span>Logout</span>
-          <span aria-hidden="true">›</span>
-        </button>
-      </section>
+      <Section title="Account">
+        <SettingsRow title="User name" value={settings?.user?.username ?? user?.username ?? 'local'} />
+        <SettingsRow onClick={() => onOpen('changePassword')} title="Change Password" />
+      </Section>
+
+      <Section title="Data">
+        <SettingsRow onClick={() => onOpen('exportData')} title="Export Data" />
+        <SettingsRow onClick={() => onOpen('importData')} title="Import Data" />
+      </Section>
+
+      <Section title="Reminder Advance">
+        <SettingsRow
+          onClick={() => onOpen('reminder')}
+          title="Default Advance"
+          value={
+            reminderOptions.find(
+              (option) => option.value === settings?.defaultReminderAdvanceMinutes,
+            )?.label ?? '15 minutes'
+          }
+        />
+      </Section>
+
+      <Section title="Information">
+        <SettingsRow title="Version" value={settings?.version ?? '0.0.0'} />
+      </Section>
+
+      <Section title="Danger zone">
+        <SettingsRow danger onClick={onLogout} title="Log out" />
+        <SettingsRow danger onClick={() => onOpen('deleteAccount')} title="Delete Account" />
+      </Section>
     </main>
   )
 }
 
-function FilesScreen({ onBack }: { onBack: () => void }) {
-  const [files, setFiles] = useState<FileRecord[]>([])
+function SubHeader({
+  onBack,
+  title,
+}: {
+  onBack: () => void
+  title: string
+}) {
+  return (
+    <header className="sub-header">
+      <button className="text-button" onClick={onBack} type="button">
+        뒤로
+      </button>
+      <div>
+        <h1>{title}</h1>
+      </div>
+    </header>
+  )
+}
+
+function ChangePasswordScreen({ onBack }: { onBack: () => void }) {
+  const [currentPassword, setCurrentPassword] = useState('')
+  const [newPassword, setNewPassword] = useState('')
+  const [confirmPassword, setConfirmPassword] = useState('')
+  const [message, setMessage] = useState('')
   const [error, setError] = useState('')
 
-  async function refreshFiles() {
+  async function submit(event: FormEvent) {
+    event.preventDefault()
+    setError('')
+    setMessage('')
+
+    if (newPassword.length < 8) {
+      setError('새 비밀번호는 8자 이상이어야 합니다.')
+      return
+    }
+
+    if (newPassword !== confirmPassword) {
+      setError('새 비밀번호가 일치하지 않습니다.')
+      return
+    }
+
     try {
-      const response = await apiFetch<{ files: FileRecord[] }>('/api/files')
-      setFiles(response.files)
-      setError('')
+      await apiFetch('/api/auth/change-password', {
+        method: 'POST',
+        body: JSON.stringify({ currentPassword, newPassword }),
+      })
+      setCurrentPassword('')
+      setNewPassword('')
+      setConfirmPassword('')
+      setMessage('비밀번호를 변경했습니다. 현재 세션은 유지됩니다.')
     } catch {
-      setError('파일 목록을 불러오지 못했습니다.')
+      setError('비밀번호를 변경하지 못했습니다.')
     }
   }
 
-  useEffect(() => {
-    void Promise.resolve().then(refreshFiles)
-  }, [])
+  return (
+    <main className="screen plain-screen">
+      <SubHeader onBack={onBack} title="Change Password" />
+      <form className="settings-form" onSubmit={submit}>
+        <input
+          autoComplete="current-password"
+          onChange={(event) => setCurrentPassword(event.target.value)}
+          placeholder="현재 비밀번호"
+          type="password"
+          value={currentPassword}
+        />
+        <input
+          autoComplete="new-password"
+          onChange={(event) => setNewPassword(event.target.value)}
+          placeholder="새 비밀번호"
+          type="password"
+          value={newPassword}
+        />
+        <input
+          autoComplete="new-password"
+          onChange={(event) => setConfirmPassword(event.target.value)}
+          placeholder="새 비밀번호 확인"
+          type="password"
+          value={confirmPassword}
+        />
+        {error && <p className="form-error">{error}</p>}
+        {message && <p className="form-success">{message}</p>}
+        <button type="submit">변경</button>
+      </form>
+    </main>
+  )
+}
+
+function ExportDataScreen({ onBack }: { onBack: () => void }) {
+  const [format, setFormat] = useState<'plain' | 'encrypted'>('plain')
+  const [password, setPassword] = useState('')
+  const [error, setError] = useState('')
+
+  async function exportData() {
+    setError('')
+
+    if (format === 'encrypted' && !password) {
+      setError('내보내기 암호를 입력하세요.')
+      return
+    }
+
+    try {
+      const response = await apiFetch<unknown>('/api/data/export', {
+        method: 'POST',
+        body: JSON.stringify({ format, password: format === 'encrypted' ? password : undefined }),
+      })
+      downloadJson(
+        format === 'encrypted' ? 'mebox-export.encrypted.json' : 'mebox-export.json',
+        response,
+      )
+      setPassword('')
+    } catch {
+      setError('내보내기에 실패했습니다.')
+    }
+  }
 
   return (
-    <main className="screen">
-      <header className="app-header compact">
-        <div>
-          <span className="eyebrow">Files</span>
-          <h1>파일</h1>
+    <main className="screen plain-screen">
+      <SubHeader onBack={onBack} title="Export Data" />
+      <div className="settings-form">
+        <div className="choice-group">
+          <button
+            className={format === 'plain' ? 'selected' : ''}
+            onClick={() => setFormat('plain')}
+            type="button"
+          >
+            평문으로 내보내기
+          </button>
+          <button
+            className={format === 'encrypted' ? 'selected' : ''}
+            onClick={() => setFormat('encrypted')}
+            type="button"
+          >
+            암호화해서 내보내기
+          </button>
         </div>
-        <button className="secondary-button" onClick={onBack} type="button">
-          뒤로
-        </button>
-      </header>
-
-      {error && <p className="form-error">{error}</p>}
-
-      <section className="file-list">
-        {files.length ? (
-          files.map((file) => (
-            <a className="file-row" href={file.downloadUrl} key={file.id}>
-              <span>
-                <strong>{file.originalName}</strong>
-                <small>
-                  {file.mimeType} · {formatBytes(file.sizeBytes)}
-                </small>
-              </span>
-              <span aria-hidden="true">↓</span>
-            </a>
-          ))
-        ) : (
-          <div className="empty-state">저장된 파일이 없습니다.</div>
+        {format === 'encrypted' && (
+          <input
+            onChange={(event) => setPassword(event.target.value)}
+            placeholder="내보내기 암호"
+            type="password"
+            value={password}
+          />
         )}
-      </section>
+        <p className="settings-help">업로드 파일의 바이너리는 이번 내보내기에 포함되지 않습니다.</p>
+        {error && <p className="form-error">{error}</p>}
+        <button onClick={exportData} type="button">
+          다운로드
+        </button>
+      </div>
     </main>
+  )
+}
+
+function ImportDataScreen({ onBack }: { onBack: () => void }) {
+  const [format, setFormat] = useState<'plain' | 'encrypted'>('plain')
+  const [password, setPassword] = useState('')
+  const [file, setFile] = useState<File | null>(null)
+  const [message, setMessage] = useState('')
+  const [error, setError] = useState('')
+
+  async function importData() {
+    setError('')
+    setMessage('')
+
+    if (!file) {
+      setError('가져올 JSON 파일을 선택하세요.')
+      return
+    }
+
+    if (format === 'encrypted' && !password) {
+      setError('암호화 JSON 암호를 입력하세요.')
+      return
+    }
+
+    try {
+      const payload = JSON.parse(await file.text())
+      const response = await apiFetch<{ importedItems: number }>('/api/data/import', {
+        method: 'POST',
+        body: JSON.stringify({ format, password: format === 'encrypted' ? password : undefined, payload }),
+      })
+      setMessage(`${response.importedItems}개 항목을 가져왔습니다.`)
+      setPassword('')
+      setFile(null)
+    } catch {
+      setError('가져오기에 실패했습니다.')
+    }
+  }
+
+  return (
+    <main className="screen plain-screen">
+      <SubHeader onBack={onBack} title="Import Data" />
+      <div className="settings-form">
+        <div className="choice-group">
+          <button
+            className={format === 'plain' ? 'selected' : ''}
+            onClick={() => setFormat('plain')}
+            type="button"
+          >
+            평문 JSON
+          </button>
+          <button
+            className={format === 'encrypted' ? 'selected' : ''}
+            onClick={() => setFormat('encrypted')}
+            type="button"
+          >
+            암호화 JSON
+          </button>
+        </div>
+        <input
+          accept="application/json,.json"
+          onChange={(event) => setFile(event.target.files?.[0] ?? null)}
+          type="file"
+        />
+        {format === 'encrypted' && (
+          <input
+            onChange={(event) => setPassword(event.target.value)}
+            placeholder="가져오기 암호"
+            type="password"
+            value={password}
+          />
+        )}
+        <p className="settings-help">가져오기는 기존 데이터를 지우지 않고 가능한 항목을 추가합니다.</p>
+        {error && <p className="form-error">{error}</p>}
+        {message && <p className="form-success">{message}</p>}
+        <button onClick={importData} type="button">
+          가져오기
+        </button>
+      </div>
+    </main>
+  )
+}
+
+function ReminderScreen({
+  onBack,
+  onUpdated,
+  settings,
+}: {
+  onBack: () => void
+  onUpdated: (settings: Partial<SettingsResponse>) => void
+  settings: SettingsResponse | null
+}) {
+  const [error, setError] = useState('')
+
+  async function update(value: number) {
+    setError('')
+
+    try {
+      const response = await apiFetch<{ defaultReminderAdvanceMinutes: number }>('/api/settings', {
+        method: 'PATCH',
+        body: JSON.stringify({ defaultReminderAdvanceMinutes: value }),
+      })
+      onUpdated({ defaultReminderAdvanceMinutes: response.defaultReminderAdvanceMinutes })
+    } catch {
+      setError('설정을 저장하지 못했습니다.')
+    }
+  }
+
+  return (
+    <main className="screen plain-screen">
+      <SubHeader onBack={onBack} title="Reminder Advance" />
+      <section className="settings-section">
+        <div className="settings-intro">
+          <strong>Default Advance</strong>
+          <p>Select how long before the scheduled time you want to be notified</p>
+        </div>
+        <div className="settings-list">
+          {reminderOptions.map((option) => (
+            <button
+              className="settings-row"
+              key={option.value}
+              onClick={() => {
+                void update(option.value)
+              }}
+              type="button"
+            >
+              <span>{option.label}</span>
+              {settings?.defaultReminderAdvanceMinutes === option.value && <small>선택됨</small>}
+            </button>
+          ))}
+        </div>
+      </section>
+      {error && <p className="form-error">{error}</p>}
+    </main>
+  )
+}
+
+function DeleteAccountScreen({
+  onBack,
+  onDeleted,
+}: {
+  onBack: () => void
+  onDeleted: () => void
+}) {
+  const [confirmation, setConfirmation] = useState('')
+  const [error, setError] = useState('')
+
+  async function submit(event: FormEvent) {
+    event.preventDefault()
+    setError('')
+
+    try {
+      await apiFetch('/api/auth/delete-account', {
+        method: 'POST',
+        body: JSON.stringify({ confirmation }),
+      })
+      onDeleted()
+    } catch {
+      setError('계정을 삭제하지 못했습니다. DELETE를 정확히 입력하세요.')
+    }
+  }
+
+  return (
+    <main className="screen plain-screen">
+      <SubHeader onBack={onBack} title="Delete Account" />
+      <form className="settings-form" onSubmit={submit}>
+        <p className="settings-help">
+          로컬 계정, 세션, 인박스 데이터, 앱 설정, 업로드 파일을 삭제합니다. 소스 코드나
+          저장소 파일은 삭제하지 않습니다.
+        </p>
+        <input
+          onChange={(event) => setConfirmation(event.target.value)}
+          placeholder="DELETE"
+          value={confirmation}
+        />
+        {error && <p className="form-error">{error}</p>}
+        <button className="danger-button" disabled={confirmation !== 'DELETE'} type="submit">
+          Delete Account
+        </button>
+      </form>
+    </main>
+  )
+}
+
+function SettingsScreen({
+  onDeleted,
+  onLogout,
+  settings,
+  setSettings,
+  user,
+}: {
+  onDeleted: () => void
+  onLogout: () => void
+  settings: SettingsResponse | null
+  setSettings: (settings: SettingsResponse | null) => void
+  user: AuthUser | null
+}) {
+  const [view, setView] = useState<SettingsView>('home')
+
+  useEffect(() => {
+    async function loadSettings() {
+      try {
+        setSettings(await apiFetch<SettingsResponse>('/api/settings'))
+      } catch {
+        setSettings(null)
+      }
+    }
+
+    void loadSettings()
+  }, [setSettings])
+
+  if (view === 'changePassword') {
+    return <ChangePasswordScreen onBack={() => setView('home')} />
+  }
+
+  if (view === 'exportData') {
+    return <ExportDataScreen onBack={() => setView('home')} />
+  }
+
+  if (view === 'importData') {
+    return <ImportDataScreen onBack={() => setView('home')} />
+  }
+
+  if (view === 'reminder') {
+    return (
+      <ReminderScreen
+        onBack={() => setView('home')}
+        onUpdated={(partial) => {
+          setSettings(settings ? { ...settings, ...partial } : null)
+        }}
+        settings={settings}
+      />
+    )
+  }
+
+  if (view === 'deleteAccount') {
+    return <DeleteAccountScreen onBack={() => setView('home')} onDeleted={onDeleted} />
+  }
+
+  return (
+    <SettingsHome
+      onLogout={onLogout}
+      onOpen={setView}
+      settings={settings}
+      user={user}
+    />
+  )
+}
+
+function BottomNav({
+  activeNav,
+  onChange,
+}: {
+  activeNav: NavKey
+  onChange: (nav: NavKey) => void
+}) {
+  return (
+    <nav className="bottom-nav" aria-label="하단 내비게이션">
+      <button
+        className={activeNav === 'inbox' ? 'active' : ''}
+        onClick={() => onChange('inbox')}
+        type="button"
+      >
+        인박스
+      </button>
+      <button
+        className={activeNav === 'search' ? 'active' : ''}
+        onClick={() => onChange('search')}
+        type="button"
+      >
+        검색
+      </button>
+      <button
+        className={activeNav === 'settings' ? 'active' : ''}
+        onClick={() => onChange('settings')}
+        type="button"
+      >
+        설정
+      </button>
+    </nav>
   )
 }
 
@@ -750,15 +1261,14 @@ function App() {
   const [items, setItems] = useState<InboxItem[]>([])
   const [alerts, setAlerts] = useState<AlertItem[]>([])
   const [loadError, setLoadError] = useState('')
+  const [settings, setSettings] = useState<SettingsResponse | null>(null)
+  const [user, setUser] = useState<AuthUser | null>(null)
 
   async function refreshAuth() {
     try {
       const response = await apiFetch<AuthResponse>('/api/auth/me')
-      if (response.authenticated) {
-        setAuthView('authenticated')
-      } else {
-        setAuthView(response.setupRequired ? 'setup' : 'login')
-      }
+      setUser(response.user)
+      setAuthView(response.authenticated ? 'authenticated' : response.setupRequired ? 'setup' : 'login')
     } catch {
       setAuthView('login')
     }
@@ -784,9 +1294,20 @@ function App() {
     } finally {
       setItems([])
       setAlerts([])
+      setSettings(null)
+      setUser(null)
       setActiveNav('inbox')
       setAuthView('login')
     }
+  }
+
+  function handleDeleted() {
+    setItems([])
+    setAlerts([])
+    setSettings(null)
+    setUser(null)
+    setActiveNav('inbox')
+    setAuthView('setup')
   }
 
   useEffect(() => {
@@ -799,40 +1320,11 @@ function App() {
     }
   }, [authView])
 
-  const screen = useMemo(() => {
-    if (activeNav === 'search') {
-      return <SearchScreen />
-    }
-    if (activeNav === 'files') {
-      return <FilesScreen onBack={() => setActiveNav('more')} />
-    }
-    if (activeNav === 'more') {
-      return (
-        <MoreScreen
-          onLogout={() => {
-            void logout()
-          }}
-          onOpenFiles={() => setActiveNav('files')}
-        />
-      )
-    }
-    return (
-      <InboxScreen
-        alerts={alerts}
-        items={items}
-        onCreated={(item) => {
-          setItems((current) => [item, ...current])
-          void refreshInbox()
-        }}
-      />
-    )
-  }, [activeNav, alerts, items])
-
   if (authView === 'loading') {
     return (
       <main className="auth-screen">
-        <div className="auth-panel">
-          <span className="eyebrow">MeBox</span>
+        <div className="auth-panel compact">
+          <span className="auth-mark">MeBox</span>
           <h1>로딩</h1>
         </div>
       </main>
@@ -843,7 +1335,8 @@ function App() {
     return (
       <AuthScreen
         mode={authView}
-        onAuthenticated={() => {
+        onAuthenticated={(nextUser) => {
+          setUser(nextUser)
           setAuthView('authenticated')
         }}
       />
@@ -851,36 +1344,36 @@ function App() {
   }
 
   return (
-    <div className="app-shell">
-      {loadError && activeNav === 'inbox' && (
-        <div className="offline-banner">{loadError}</div>
-      )}
+    <div className="desktop-stage">
+      <div className="phone-shell">
+        {loadError && <div className="offline-banner">{loadError}</div>}
 
-      {screen}
+        {activeNav === 'search' ? (
+          <SearchScreen />
+        ) : activeNav === 'settings' ? (
+          <SettingsScreen
+            onDeleted={handleDeleted}
+            onLogout={() => {
+              void logout()
+            }}
+            settings={settings}
+            setSettings={setSettings}
+            user={user}
+          />
+        ) : (
+          <InboxScreen
+            alerts={alerts}
+            items={items}
+            onCreated={(item) => {
+              setItems((current) => [item, ...current])
+              void refreshInbox()
+            }}
+            onSearch={() => setActiveNav('search')}
+          />
+        )}
 
-      <nav className="bottom-nav" aria-label="하단 내비게이션">
-        <button
-          className={activeNav === 'inbox' ? 'active' : ''}
-          onClick={() => setActiveNav('inbox')}
-          type="button"
-        >
-          인박스
-        </button>
-        <button
-          className={activeNav === 'search' ? 'active' : ''}
-          onClick={() => setActiveNav('search')}
-          type="button"
-        >
-          검색
-        </button>
-        <button
-          className={activeNav === 'more' || activeNav === 'files' ? 'active' : ''}
-          onClick={() => setActiveNav('more')}
-          type="button"
-        >
-          더보기
-        </button>
-      </nav>
+        <BottomNav activeNav={activeNav} onChange={setActiveNav} />
+      </div>
     </div>
   )
 }

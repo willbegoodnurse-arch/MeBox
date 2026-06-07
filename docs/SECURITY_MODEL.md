@@ -69,6 +69,28 @@ Sessions expire server-side. Logout revokes the matching session on the server a
 
 Protected APIs include inbox reads, item creation, search, alerts, file metadata, upload, and download routes. `/api/health` remains public. Auth routes return sanitized errors and do not expose whether different accounts exist because there is only one local account.
 
+Changing the password requires the current password. The current session stays valid after a password change, and other sessions are revoked.
+
+Deleting the account requires an authenticated request with confirmation text `DELETE`. The delete flow clears local users, sessions, inbox records, app settings, and uploaded files referenced by app metadata. It must not delete source code, repository files, or files outside the configured app upload directory.
+
+## Data Export And Import
+
+Plain export downloads JSON. Encrypted export uses Node built-in crypto with AES-256-GCM and a scrypt-derived 256-bit key. The encrypted export includes KDF metadata, salt, IV, authentication tag, and ciphertext.
+
+Export does not include `users.password_hash` or `sessions`. Export includes app records for:
+
+- `items`
+- `links`
+- `todos`
+- `lists`
+- `list_items`
+- `files` metadata
+- `announcements`
+- `recurring_expenses`
+- `app_settings`
+
+Uploaded file binaries are not included in the MVP export/import flow. Import validates the JSON shape before writing and uses append/merge behavior instead of destructive overwrite. Import must not import users, password hashes, or sessions.
+
 ## Storage
 
 SQLite data is stored locally under `data/` by default. Uploaded files are stored locally under `uploads/`.

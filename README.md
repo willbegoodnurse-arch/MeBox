@@ -48,6 +48,26 @@ After setup, use the login screen. Sessions are stored in an HttpOnly `SameSite=
 
 There is no password reset, email flow, OAuth, external identity provider, or public account system. This login layer is not a replacement for Tailscale-only access; keep the app private to your Tailnet.
 
+Password changes require the current password. After a password change, the current session stays valid and other sessions are revoked.
+
+## Settings And Data
+
+The Settings tab provides:
+
+- Account username display
+- Password change
+- Plain JSON export
+- AES-256-GCM encrypted JSON export using a password-derived scrypt key
+- Plain/encrypted JSON import using append/merge behavior
+- Default reminder advance setting
+- App version display
+- Logout
+- Guarded local account deletion requiring `DELETE`
+
+Exports exclude `users.password_hash` and `sessions`. Uploaded file metadata is included, but uploaded file binaries are not included in export/import yet.
+
+The default reminder advance is stored in SQLite. Reminder creation does not yet consume the setting automatically; wire that into new reminder creation in a follow-up.
+
 ## Upload Limits
 
 Uploaded files are private local inbox items. There is no public sharing route.
