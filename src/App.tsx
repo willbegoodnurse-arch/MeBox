@@ -46,6 +46,7 @@ type AuthView = 'loading' | 'setup' | 'login' | 'authenticated'
 type NavKey = 'inbox' | 'search' | 'settings'
 type SettingsView =
   | 'home'
+  | 'editUsername'
   | 'changePassword'
   | 'exportData'
   | 'importData'
@@ -785,11 +786,14 @@ function SettingsHome({
     <main className="screen plain-screen">
       <header className="section-header">
         <h1>설정</h1>
-        <p>계정, 데이터, 알림</p>
       </header>
 
       <Section title="Account">
-        <SettingsRow title="User name" value={settings?.user?.username ?? user?.username ?? 'local'} />
+        <SettingsRow
+          onClick={() => onOpen('editUsername')}
+          title="User name"
+          value={settings?.user?.username ?? user?.username ?? 'local'}
+        />
         <SettingsRow onClick={() => onOpen('changePassword')} title="Change Password" />
       </Section>
 
@@ -838,6 +842,59 @@ function SubHeader({
         <h1>{title}</h1>
       </div>
     </header>
+  )
+}
+
+function EditUsernameScreen({
+  onBack,
+  onUpdated,
+  user,
+}: {
+  onBack: () => void
+  onUpdated: (user: AuthUser) => void
+  user: AuthUser | null
+}) {
+  const [username, setUsername] = useState(user?.username ?? '')
+  const [error, setError] = useState('')
+  const trimmedUsername = username.trim()
+
+  async function submit(event: FormEvent) {
+    event.preventDefault()
+    setError('')
+
+    if (!trimmedUsername) {
+      setError('User name is required.')
+      return
+    }
+
+    try {
+      const response = await apiFetch<{ user: AuthUser }>('/api/auth/username', {
+        method: 'PATCH',
+        body: JSON.stringify({ username }),
+      })
+      onUpdated(response.user)
+      onBack()
+    } catch {
+      setError('Could not update the user name.')
+    }
+  }
+
+  return (
+    <main className="screen plain-screen">
+      <SubHeader onBack={onBack} title="User name" />
+      <form className="settings-form" onSubmit={submit}>
+        <input
+          autoComplete="username"
+          onChange={(event) => setUsername(event.target.value)}
+          placeholder="User name"
+          value={username}
+        />
+        {error && <p className="form-error">{error}</p>}
+        <button disabled={!trimmedUsername} type="submit">
+          Save
+        </button>
+      </form>
+    </main>
   )
 }
 
@@ -1044,7 +1101,10 @@ function ImportDataScreen({ onBack }: { onBack: () => void }) {
             value={password}
           />
         )}
-        <p className="settings-help">가져오기는 기존 데이터를 지우지 않고 가능한 항목을 추가합니다.</p>
+        <p className="settings-help">
+          가져오기는 기존 데이터를 지우지 않고 가능한 항목을 추가합니다. 파일 항목은
+          메타데이터만 복원되며 업로드 파일 바이너리는 포함되지 않습니다.
+        </p>
         {error && <p className="form-error">{error}</p>}
         {message && <p className="form-success">{message}</p>}
         <button onClick={importData} type="button">
@@ -1161,12 +1221,14 @@ function SettingsScreen({
   onLogout,
   settings,
   setSettings,
+  setUser,
   user,
 }: {
   onDeleted: () => void
   onLogout: () => void
   settings: SettingsResponse | null
   setSettings: (settings: SettingsResponse | null) => void
+  setUser: (user: AuthUser | null) => void
   user: AuthUser | null
 }) {
   const [view, setView] = useState<SettingsView>('home')
@@ -1182,6 +1244,19 @@ function SettingsScreen({
 
     void loadSettings()
   }, [setSettings])
+
+  if (view === 'editUsername') {
+    return (
+      <EditUsernameScreen
+        onBack={() => setView('home')}
+        onUpdated={(updatedUser) => {
+          setUser(updatedUser)
+          setSettings(settings ? { ...settings, user: updatedUser } : settings)
+        }}
+        user={settings?.user ?? user}
+      />
+    )
+  }
 
   if (view === 'changePassword') {
     return <ChangePasswordScreen onBack={() => setView('home')} />
@@ -1358,6 +1433,7 @@ function App() {
             }}
             settings={settings}
             setSettings={setSettings}
+            setUser={setUser}
             user={user}
           />
         ) : (

@@ -17,6 +17,7 @@ import {
   makeSessionCookie,
   parseCookie,
   revokeSession,
+  updateUsername,
   validateSession,
   verifyLogin,
 } from './auth'
@@ -54,6 +55,7 @@ import {
   settingsPatchSchema,
   setupInputSchema,
   todoInputSchema,
+  updateUsernameInputSchema,
 } from './validation'
 
 type AppOptions = {
@@ -273,6 +275,16 @@ export function createApp({ db, uploadDir = 'uploads' }: AppOptions) {
       ok: true,
       user: safeUser(user),
       sessionPolicy: 'current_session_kept_other_sessions_revoked',
+    }
+  })
+
+  app.patch('/api/auth/username', async (request) => {
+    const input = parseBody(updateUsernameInputSchema, request.body)
+    const user = updateUsername(db, input.username)
+
+    return {
+      ok: true,
+      user: safeUser(user),
     }
   })
 

@@ -54,7 +54,7 @@ Password changes require the current password. After a password change, the curr
 
 The Settings tab provides:
 
-- Account username display
+- Account username display and editing
 - Password change
 - Plain JSON export
 - AES-256-GCM encrypted JSON export using a password-derived scrypt key
@@ -64,7 +64,10 @@ The Settings tab provides:
 - Logout
 - Guarded local account deletion requiring `DELETE`
 
-Exports exclude `users.password_hash` and `sessions`. Uploaded file metadata is included, but uploaded file binaries are not included in export/import yet.
+Exports exclude `users.password_hash` and `sessions`. Import rejects payloads that
+try to include auth tables. Uploaded file metadata is included and can be restored,
+but uploaded file binaries are not included in export/import yet, so restored file
+items preserve metadata only until binaries are added to a future export format.
 
 The default reminder advance is stored in SQLite. Reminder creation does not yet consume the setting automatically; wire that into new reminder creation in a follow-up.
 

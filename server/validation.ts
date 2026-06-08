@@ -54,8 +54,10 @@ export const searchQuerySchema = z.object({
   type: z.string().trim().optional(),
 })
 
+export const usernameSchema = z.string().trim().min(1).max(80)
+
 export const setupInputSchema = z.object({
-  username: z.string().trim().min(1).max(80).optional(),
+  username: usernameSchema.optional(),
   password: z.string().min(8).max(200),
 })
 
@@ -72,6 +74,10 @@ export const changePasswordInputSchema = z
     message: 'New password must be different',
     path: ['newPassword'],
   })
+
+export const updateUsernameInputSchema = z.object({
+  username: usernameSchema,
+})
 
 export const deleteAccountInputSchema = z.object({
   confirmation: z.literal('DELETE'),

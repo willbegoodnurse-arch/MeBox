@@ -118,6 +118,22 @@ export async function changePassword(
   return { id: user.id, username: user.username }
 }
 
+export function updateUsername(db: Database.Database, username: string) {
+  const user = db
+    .prepare('SELECT id FROM users WHERE id = 1')
+    .get() as { id: number } | undefined
+
+  if (!user) {
+    throw new AuthError('Authentication required', 401)
+  }
+
+  db.prepare(
+    "UPDATE users SET username = ?, updated_at = datetime('now') WHERE id = 1",
+  ).run(username)
+
+  return { id: user.id, username }
+}
+
 export function createSession(db: Database.Database, userId: number, now = new Date()) {
   cleanupExpiredSessions(db, now)
 

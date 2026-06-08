@@ -27,21 +27,25 @@ const kdfOptions = {
 }
 
 const recordSchema = z.record(z.string(), z.unknown())
-const importDataSchema = z.object({
-  version: z.number().int().min(1),
-  exportedAt: z.string(),
-  tables: z.object({
-    items: z.array(recordSchema).default([]),
-    links: z.array(recordSchema).default([]),
-    todos: z.array(recordSchema).default([]),
-    lists: z.array(recordSchema).default([]),
-    list_items: z.array(recordSchema).default([]),
-    files: z.array(recordSchema).default([]),
-    announcements: z.array(recordSchema).default([]),
-    recurring_expenses: z.array(recordSchema).default([]),
-    app_settings: z.array(recordSchema).default([]),
-  }),
-})
+const importDataSchema = z
+  .object({
+    version: z.number().int().min(1),
+    exportedAt: z.string(),
+    tables: z
+      .object({
+        items: z.array(recordSchema).default([]),
+        links: z.array(recordSchema).default([]),
+        todos: z.array(recordSchema).default([]),
+        lists: z.array(recordSchema).default([]),
+        list_items: z.array(recordSchema).default([]),
+        files: z.array(recordSchema).default([]),
+        announcements: z.array(recordSchema).default([]),
+        recurring_expenses: z.array(recordSchema).default([]),
+        app_settings: z.array(recordSchema).default([]),
+      })
+      .strict(),
+  })
+  .strict()
 
 export type ExportPayload = z.infer<typeof importDataSchema>
 
@@ -192,6 +196,7 @@ export function importAppData(db: Database.Database, payload: ExportPayload) {
   const links = byItemId(imported.tables.links)
   const todos = byItemId(imported.tables.todos)
   const lists = byItemId(imported.tables.lists)
+  const files = byItemId(imported.tables.files)
   const announcements = byItemId(imported.tables.announcements)
   const expenses = byItemId(imported.tables.recurring_expenses)
 
@@ -245,6 +250,30 @@ export function importAppData(db: Database.Database, payload: ExportPayload) {
           db.prepare('INSERT INTO lists (item_id, title) VALUES (?, ?)').run(
             newItemId,
             row.title,
+          )
+        }
+      }
+
+      if (item.type === 'file') {
+        const row = files.get(oldItemId)
+        if (
+          row &&
+          typeof row.original_name === 'string' &&
+          typeof row.stored_name === 'string' &&
+          typeof row.mime_type === 'string' &&
+          typeof row.size_bytes === 'number'
+        ) {
+          db.prepare(
+            `INSERT INTO files
+              (item_id, original_name, stored_name, mime_type, size_bytes, created_at)
+              VALUES (?, ?, ?, ?, ?, ?)`,
+          ).run(
+            newItemId,
+            row.original_name,
+            row.stored_name,
+            row.mime_type,
+            row.size_bytes,
+            row.created_at ?? new Date().toISOString(),
           )
         }
       }

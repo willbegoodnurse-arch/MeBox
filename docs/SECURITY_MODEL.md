@@ -89,7 +89,12 @@ Export does not include `users.password_hash` or `sessions`. Export includes app
 - `recurring_expenses`
 - `app_settings`
 
-Uploaded file binaries are not included in the MVP export/import flow. Import validates the JSON shape before writing and uses append/merge behavior instead of destructive overwrite. Import must not import users, password hashes, or sessions.
+Uploaded file binaries are not included in the MVP export/import flow. File metadata
+is included and restored, but restored file downloads will not work unless the
+underlying binary file already exists in local storage. Import validates the JSON
+shape before writing and uses append/merge behavior instead of destructive
+overwrite. Import rejects users, password hashes, sessions, and other unexpected
+top-level auth material.
 
 ## Storage
 
