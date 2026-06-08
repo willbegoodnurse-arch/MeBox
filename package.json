@@ -6,8 +6,11 @@
   "scripts": {
     "dev": "vite",
     "server:dev": "tsx server/index.ts",
+    "dev:e2e": "tsx scripts/e2e-vite.ts",
+    "server:e2e": "tsx scripts/e2e-server.ts",
     "typecheck": "tsc -b",
     "test": "tsx --test server/**/*.test.ts",
+    "test:e2e": "playwright test",
     "build": "tsc -b && vite build",
     "lint": "eslint .",
     "preview": "vite preview"
@@ -22,6 +25,7 @@
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",
+    "@playwright/test": "^1.60.0",
     "@types/better-sqlite3": "^7.6.13",
     "@types/node": "^24.12.3",
     "@types/react": "^19.2.14",

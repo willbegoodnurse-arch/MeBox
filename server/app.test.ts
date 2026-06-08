@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import Database from 'better-sqlite3'
-import { existsSync, mkdtempSync, rmSync } from 'node:fs'
+import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { createApp } from './app'
@@ -9,6 +9,7 @@ import { initializeSchema } from './db/schema'
 import { listAlerts, nextBillingDate } from './alerts'
 import { MAX_UPLOAD_BYTES } from './files'
 import { createFirstUser, createSession } from './auth'
+import { decryptExport } from './data'
 
 function testDb() {
   const db = new Database(':memory:')
@@ -71,6 +72,18 @@ function tableCount(db: Database.Database, tableName: string) {
       count: number
     }
   ).count
+}
+
+function appSource() {
+  return readFileSync(join(process.cwd(), 'src', 'App.tsx'), 'utf8')
+}
+
+function sourceBetween(source: string, start: string, end: string) {
+  const startIndex = source.indexOf(start)
+  const endIndex = source.indexOf(end, startIndex)
+  assert.notEqual(startIndex, -1)
+  assert.notEqual(endIndex, -1)
+  return source.slice(startIndex, endIndex)
 }
 
 test('creates and lists note items', async () => {
@@ -491,4 +504,765 @@ test('expired session is rejected', async () => {
   assert.equal(response.statusCode, 401)
 
   await closeTestApp(app, db)
+})
+
+test('change password succeeds with current password', async () => {
+  const db = testDb()
+  const app = createApp({ db })
+  const cookie = await authCookie(app)
+
+  const response = await app.inject({
+    method: 'POST',
+    url: '/api/auth/change-password',
+    headers: { cookie },
+    payload: {
+      currentPassword: 'correct horse battery staple',
+      newPassword: 'new correct horse battery staple',
+    },
+  })
+
+  assert.equal(response.statusCode, 200)
+  assert.equal(response.json().ok, true)
+  assert.equal(JSON.stringify(response.json()).includes('password'), false)
+
+  await closeTestApp(app, db)
+})
+
+test('change password fails with wrong current password', async () => {
+  const db = testDb()
+  const app = createApp({ db })
+  const cookie = await authCookie(app)
+
+  const response = await app.inject({
+    method: 'POST',
+    url: '/api/auth/change-password',
+    headers: { cookie },
+    payload: {
+      currentPassword: 'wrong password',
+      newPassword: 'new correct horse battery staple',
+    },
+  })
+
+  assert.equal(response.statusCode, 401)
+  assert.deepEqual(response.json(), { error: 'Invalid password' })
+
+  await closeTestApp(app, db)
+})
+
+test('old password no longer works and new password works after change', async () => {
+  const db = testDb()
+  const app = createApp({ db })
+  const cookie = await authCookie(app)
+
+  await app.inject({
+    method: 'POST',
+    url: '/api/auth/change-password',
+    headers: { cookie },
+    payload: {
+      currentPassword: 'correct horse battery staple',
+      newPassword: 'new correct horse battery staple',
+    },
+  })
+  const oldLogin = await app.inject({
+    method: 'POST',
+    url: '/api/auth/login',
+    payload: { password: 'correct horse battery staple' },
+  })
+  const newLogin = await app.inject({
+    method: 'POST',
+    url: '/api/auth/login',
+    payload: { password: 'new correct horse battery staple' },
+  })
+
+  assert.equal(oldLogin.statusCode, 401)
+  assert.equal(newLogin.statusCode, 200)
+
+  await closeTestApp(app, db)
+})
+
+test('username can be updated and is reflected in the active session', async () => {
+  const db = testDb()
+  const app = createApp({ db })
+  const cookie = await authCookie(app)
+
+  const response = await app.inject({
+    method: 'PATCH',
+    url: '/api/auth/username',
+    headers: { cookie },
+    payload: { username: '  renamed local  ' },
+  })
+  const meResponse = await app.inject({
+    url: '/api/auth/me',
+    headers: { cookie },
+  })
+  const settingsResponse = await app.inject({
+    url: '/api/settings',
+    headers: { cookie },
+  })
+
+  assert.equal(response.statusCode, 200)
+  assert.equal(response.json().user.username, 'renamed local')
+  assert.equal(response.payload.includes('password_hash'), false)
+  assert.equal(response.payload.includes('token'), false)
+  assert.equal(meResponse.json().user.username, 'renamed local')
+  assert.equal(settingsResponse.json().user.username, 'renamed local')
+
+  await closeTestApp(app, db)
+})
+
+test('username update rejects empty names', async () => {
+  const db = testDb()
+  const app = createApp({ db })
+  const cookie = await authCookie(app)
+
+  const response = await app.inject({
+    method: 'PATCH',
+    url: '/api/auth/username',
+    headers: { cookie },
+    payload: { username: '   ' },
+  })
+
+  assert.equal(response.statusCode, 400)
+  assert.equal(
+    (db.prepare('SELECT username FROM users WHERE id = 1').get() as { username: string })
+      .username,
+    'local',
+  )
+
+  await closeTestApp(app, db)
+})
+
+test('plain export excludes password hashes and sessions', async () => {
+  const db = testDb()
+  const app = createApp({ db })
+  const cookie = await authCookie(app)
+
+  await app.inject({
+    method: 'POST',
+    url: '/api/items/notes',
+    headers: { cookie },
+    payload: { body: 'exported note' },
+  })
+  const response = await app.inject({
+    method: 'POST',
+    url: '/api/data/export',
+    headers: { cookie },
+    payload: { format: 'plain' },
+  })
+
+  assert.equal(response.statusCode, 200)
+  assert.equal(response.payload.includes('exported note'), true)
+  assert.equal(response.payload.includes('password_hash'), false)
+  assert.equal(response.payload.includes('sessions'), false)
+
+  await closeTestApp(app, db)
+})
+
+test('plain import restores exported supported data without auth material', async () => {
+  const sourceDb = testDb()
+  const sourceApp = createApp({ db: sourceDb })
+  const sourceCookie = await authCookie(sourceApp)
+
+  await sourceApp.inject({
+    method: 'POST',
+    url: '/api/items/notes',
+    headers: { cookie: sourceCookie },
+    payload: { body: 'round trip note' },
+  })
+  await sourceApp.inject({
+    method: 'POST',
+    url: '/api/items/links',
+    headers: { cookie: sourceCookie },
+    payload: { url: 'https://example.test/restore', title: 'restore link' },
+  })
+  await sourceApp.inject(
+    uploadRequest({
+      filename: 'restore.txt',
+      mimeType: 'text/plain',
+      body: Buffer.from('not exported'),
+      cookie: sourceCookie,
+    }),
+  )
+  await sourceApp.inject({
+    method: 'PATCH',
+    url: '/api/settings',
+    headers: { cookie: sourceCookie },
+    payload: { defaultReminderAdvanceMinutes: 60 },
+  })
+  const exportResponse = await sourceApp.inject({
+    method: 'POST',
+    url: '/api/data/export',
+    headers: { cookie: sourceCookie },
+    payload: { format: 'plain' },
+  })
+  const exported = exportResponse.json()
+
+  const targetDb = testDb()
+  const targetApp = createApp({ db: targetDb })
+  const targetCookie = await authCookie(targetApp)
+  const importResponse = await targetApp.inject({
+    method: 'POST',
+    url: '/api/data/import',
+    headers: { cookie: targetCookie },
+    payload: { format: 'plain', payload: exported },
+  })
+  const itemsResponse = await targetApp.inject({
+    url: '/api/items',
+    headers: { cookie: targetCookie },
+  })
+  const filesResponse = await targetApp.inject({
+    url: '/api/files',
+    headers: { cookie: targetCookie },
+  })
+  const settingsResponse = await targetApp.inject({
+    url: '/api/settings',
+    headers: { cookie: targetCookie },
+  })
+
+  assert.equal(importResponse.statusCode, 200)
+  assert.equal(importResponse.json().importedItems, 3)
+  assert.equal(itemsResponse.json().items.length, 3)
+  assert.equal(
+    itemsResponse
+      .json()
+      .items.some((item: { detail: { text?: string } | null }) => item.detail?.text === 'round trip note'),
+    true,
+  )
+  assert.equal(filesResponse.json().files.length, 1)
+  assert.equal(filesResponse.json().files[0].originalName, 'restore.txt')
+  assert.equal(settingsResponse.json().defaultReminderAdvanceMinutes, 60)
+  assert.equal(tableCount(targetDb, 'users'), 1)
+  assert.equal(tableCount(targetDb, 'sessions'), 1)
+
+  await closeTestApp(sourceApp, sourceDb)
+  await closeTestApp(targetApp, targetDb)
+})
+
+test('plain import accepts the actual exported JSON file content and returns imported items from inbox', async () => {
+  const sourceDb = testDb()
+  const sourceApp = createApp({ db: sourceDb })
+  const sourceCookie = await authCookie(sourceApp)
+
+  await sourceApp.inject({
+    method: 'POST',
+    url: '/api/items/notes',
+    headers: { cookie: sourceCookie },
+    payload: { body: 'plain file note' },
+  })
+  await sourceApp.inject({
+    method: 'POST',
+    url: '/api/items/todos',
+    headers: { cookie: sourceCookie },
+    payload: { title: 'plain file todo' },
+  })
+  const exportResponse = await sourceApp.inject({
+    method: 'POST',
+    url: '/api/data/export',
+    headers: { cookie: sourceCookie },
+    payload: { format: 'plain' },
+  })
+
+  const targetDb = testDb()
+  const targetApp = createApp({ db: targetDb })
+  const targetCookie = await authCookie(targetApp)
+  const importResponse = await targetApp.inject({
+    method: 'POST',
+    url: '/api/data/import',
+    headers: { cookie: targetCookie },
+    payload: { format: 'plain', payload: exportResponse.payload },
+  })
+  const itemsResponse = await targetApp.inject({
+    url: '/api/items',
+    headers: { cookie: targetCookie },
+  })
+  const items = itemsResponse.json().items as Array<{
+    type: string
+    detail: Record<string, unknown> | null
+  }>
+
+  assert.equal(importResponse.statusCode, 200)
+  assert.equal(importResponse.json().importedItems, 2)
+  assert.equal(itemsResponse.statusCode, 200)
+  assert.equal(items.length, 2)
+  assert.equal(items.some((item) => item.detail?.text === 'plain file note'), true)
+  assert.equal(items.some((item) => item.detail?.title === 'plain file todo'), true)
+
+  await closeTestApp(sourceApp, sourceDb)
+  await closeTestApp(targetApp, targetDb)
+})
+
+test('encrypted export can be imported with the correct password', async () => {
+  const sourceDb = testDb()
+  const sourceApp = createApp({ db: sourceDb })
+  const sourceCookie = await authCookie(sourceApp)
+  const password = 'export password'
+
+  await sourceApp.inject({
+    method: 'POST',
+    url: '/api/items/notes',
+    headers: { cookie: sourceCookie },
+    payload: { body: 'encrypted round trip note' },
+  })
+  const exportResponse = await sourceApp.inject({
+    method: 'POST',
+    url: '/api/data/export',
+    headers: { cookie: sourceCookie },
+    payload: { format: 'encrypted', password },
+  })
+
+  const targetDb = testDb()
+  const targetApp = createApp({ db: targetDb })
+  const targetCookie = await authCookie(targetApp)
+  const importResponse = await targetApp.inject({
+    method: 'POST',
+    url: '/api/data/import',
+    headers: { cookie: targetCookie },
+    payload: { format: 'encrypted', password, payload: exportResponse.json() },
+  })
+  const itemsResponse = await targetApp.inject({
+    url: '/api/items',
+    headers: { cookie: targetCookie },
+  })
+
+  assert.equal(importResponse.statusCode, 200)
+  assert.equal(itemsResponse.json().items[0].detail.text, 'encrypted round trip note')
+
+  await closeTestApp(sourceApp, sourceDb)
+  await closeTestApp(targetApp, targetDb)
+})
+
+test('encrypted import accepts the actual exported JSON file content and rejects wrong or corrupted payloads safely', async () => {
+  const sourceDb = testDb()
+  const sourceApp = createApp({ db: sourceDb })
+  const sourceCookie = await authCookie(sourceApp)
+  const password = 'export password'
+
+  await sourceApp.inject({
+    method: 'POST',
+    url: '/api/items/notes',
+    headers: { cookie: sourceCookie },
+    payload: { body: 'encrypted file note' },
+  })
+  await sourceApp.inject({
+    method: 'POST',
+    url: '/api/items/lists',
+    headers: { cookie: sourceCookie },
+    payload: { title: 'encrypted file list', items: [{ text: 'first' }, { text: 'second' }] },
+  })
+  const exportResponse = await sourceApp.inject({
+    method: 'POST',
+    url: '/api/data/export',
+    headers: { cookie: sourceCookie },
+    payload: { format: 'encrypted', password },
+  })
+
+  const targetDb = testDb()
+  const targetApp = createApp({ db: targetDb })
+  const targetCookie = await authCookie(targetApp)
+  const importResponse = await targetApp.inject({
+    method: 'POST',
+    url: '/api/data/import',
+    headers: { cookie: targetCookie },
+    payload: { format: 'encrypted', password, payload: exportResponse.payload },
+  })
+  const wrongPasswordResponse = await targetApp.inject({
+    method: 'POST',
+    url: '/api/data/import',
+    headers: { cookie: targetCookie },
+    payload: {
+      format: 'encrypted',
+      password: 'wrong password',
+      payload: exportResponse.payload,
+    },
+  })
+  const encryptedFile = JSON.parse(exportResponse.payload) as { ciphertext: string }
+  const corruptedFile = JSON.stringify({
+    ...encryptedFile,
+    ciphertext: `${encryptedFile.ciphertext.slice(0, -4)}AAAA`,
+  })
+  const corruptedResponse = await targetApp.inject({
+    method: 'POST',
+    url: '/api/data/import',
+    headers: { cookie: targetCookie },
+    payload: { format: 'encrypted', password, payload: corruptedFile },
+  })
+  const itemsResponse = await targetApp.inject({
+    url: '/api/items',
+    headers: { cookie: targetCookie },
+  })
+  const items = itemsResponse.json().items as Array<{
+    type: string
+    detail: Record<string, unknown> | null
+  }>
+
+  assert.equal(importResponse.statusCode, 200)
+  assert.equal(importResponse.json().importedItems, 2)
+  assert.equal(items.some((item) => item.detail?.text === 'encrypted file note'), true)
+  assert.equal(items.some((item) => item.detail?.title === 'encrypted file list'), true)
+  assert.equal(wrongPasswordResponse.statusCode, 400)
+  assert.deepEqual(wrongPasswordResponse.json(), { error: 'Invalid import file' })
+  assert.equal(corruptedResponse.statusCode, 400)
+  assert.deepEqual(corruptedResponse.json(), { error: 'Invalid import file' })
+
+  await closeTestApp(sourceApp, sourceDb)
+  await closeTestApp(targetApp, targetDb)
+})
+
+test('encrypted import fails safely with the wrong password', async () => {
+  const db = testDb()
+  const app = createApp({ db })
+  const cookie = await authCookie(app)
+
+  await app.inject({
+    method: 'POST',
+    url: '/api/items/notes',
+    headers: { cookie },
+    payload: { body: 'encrypted source' },
+  })
+  const exportResponse = await app.inject({
+    method: 'POST',
+    url: '/api/data/export',
+    headers: { cookie },
+    payload: { format: 'encrypted', password: 'correct password' },
+  })
+  const importResponse = await app.inject({
+    method: 'POST',
+    url: '/api/data/import',
+    headers: { cookie },
+    payload: {
+      format: 'encrypted',
+      password: 'wrong password',
+      payload: exportResponse.json(),
+    },
+  })
+
+  assert.equal(importResponse.statusCode, 400)
+  assert.deepEqual(importResponse.json(), { error: 'Invalid import file' })
+
+  await closeTestApp(app, db)
+})
+
+test('plain import rejects auth tables in the payload', async () => {
+  const db = testDb()
+  const app = createApp({ db })
+  const cookie = await authCookie(app)
+
+  const response = await app.inject({
+    method: 'POST',
+    url: '/api/data/import',
+    headers: { cookie },
+    payload: {
+      format: 'plain',
+      payload: {
+        version: 1,
+        exportedAt: new Date().toISOString(),
+        users: [{ id: 1, username: 'imported', password_hash: 'hash' }],
+        sessions: [{ token_hash: 'hash' }],
+        tables: {
+          items: [],
+          links: [],
+          todos: [],
+          lists: [],
+          list_items: [],
+          files: [],
+          announcements: [],
+          recurring_expenses: [],
+          app_settings: [],
+        },
+      },
+    },
+  })
+
+  assert.equal(response.statusCode, 400)
+  assert.deepEqual(response.json(), { error: 'Invalid import file' })
+  assert.equal(tableCount(db, 'users'), 1)
+  assert.equal(tableCount(db, 'sessions'), 1)
+
+  await closeTestApp(app, db)
+})
+
+test('encrypted export does not contain plaintext JSON and can be decrypted', async () => {
+  const db = testDb()
+  const app = createApp({ db })
+  const cookie = await authCookie(app)
+  const password = 'export password'
+
+  await app.inject({
+    method: 'POST',
+    url: '/api/items/notes',
+    headers: { cookie },
+    payload: { body: 'private exported note' },
+  })
+  const response = await app.inject({
+    method: 'POST',
+    url: '/api/data/export',
+    headers: { cookie },
+    payload: { format: 'encrypted', password },
+  })
+  const encrypted = response.json()
+  const decrypted = decryptExport(encrypted, password)
+
+  assert.equal(response.statusCode, 200)
+  assert.equal(response.payload.includes('private exported note'), false)
+  assert.equal(response.payload.includes('"items"'), false)
+  assert.equal(decrypted.tables.items.length, 1)
+  assert.equal(decrypted.tables.items[0].body, 'private exported note')
+
+  await closeTestApp(app, db)
+})
+
+test('import rejects invalid JSON payload', async () => {
+  const db = testDb()
+  const app = createApp({ db })
+  const cookie = await authCookie(app)
+
+  const response = await app.inject({
+    method: 'POST',
+    url: '/api/data/import',
+    headers: { cookie },
+    payload: { format: 'plain', payload: 'not json' },
+  })
+
+  assert.equal(response.statusCode, 400)
+  assert.deepEqual(response.json(), { error: 'Invalid import file' })
+
+  await closeTestApp(app, db)
+})
+
+test('import rejects malformed encrypted payload', async () => {
+  const db = testDb()
+  const app = createApp({ db })
+  const cookie = await authCookie(app)
+
+  const response = await app.inject({
+    method: 'POST',
+    url: '/api/data/import',
+    headers: { cookie },
+    payload: {
+      format: 'encrypted',
+      password: 'import password',
+      payload: { format: 'mebox-encrypted-json' },
+    },
+  })
+
+  assert.equal(response.statusCode, 400)
+  assert.equal(response.json().error.length > 0, true)
+
+  await closeTestApp(app, db)
+})
+
+test('import rejects corrupted encrypted payload', async () => {
+  const db = testDb()
+  const app = createApp({ db })
+  const cookie = await authCookie(app)
+
+  const exportResponse = await app.inject({
+    method: 'POST',
+    url: '/api/data/export',
+    headers: { cookie },
+    payload: { format: 'encrypted', password: 'correct password' },
+  })
+  const corrupted = {
+    ...exportResponse.json(),
+    ciphertext: 'AAAA' + exportResponse.json().ciphertext,
+  }
+  const response = await app.inject({
+    method: 'POST',
+    url: '/api/data/import',
+    headers: { cookie },
+    payload: {
+      format: 'encrypted',
+      password: 'correct password',
+      payload: corrupted,
+    },
+  })
+
+  assert.equal(response.statusCode, 400)
+  assert.deepEqual(response.json(), { error: 'Invalid import file' })
+
+  await closeTestApp(app, db)
+})
+
+test('frontend import flow refetches the same inbox endpoint after successful import', () => {
+  const source = appSource()
+  const importScreen = sourceBetween(
+    source,
+    'function ImportDataScreen',
+    'function ReminderScreen',
+  )
+
+  assert.match(importScreen, /\/api\/data\/import/)
+  assert.match(importScreen, /onImported/)
+
+  const appComponent = sourceBetween(source, 'function App()', 'export default App')
+  assert.match(appComponent, /\/api\/items/)
+  assert.match(appComponent, /onImported/)
+})
+
+test('settings default reminder advance can be read and updated', async () => {
+  const db = testDb()
+  const app = createApp({ db })
+  const cookie = await authCookie(app)
+
+  const readResponse = await app.inject({
+    url: '/api/settings',
+    headers: { cookie },
+  })
+  const updateResponse = await app.inject({
+    method: 'PATCH',
+    url: '/api/settings',
+    headers: { cookie },
+    payload: { defaultReminderAdvanceMinutes: 60 },
+  })
+  const rereadResponse = await app.inject({
+    url: '/api/settings',
+    headers: { cookie },
+  })
+
+  assert.equal(readResponse.statusCode, 200)
+  assert.equal(readResponse.json().defaultReminderAdvanceMinutes, 15)
+  assert.equal(updateResponse.statusCode, 200)
+  assert.equal(updateResponse.json().defaultReminderAdvanceMinutes, 60)
+  assert.equal(rereadResponse.json().defaultReminderAdvanceMinutes, 60)
+
+  await closeTestApp(app, db)
+})
+
+test('delete account requires DELETE confirmation', async () => {
+  const db = testDb()
+  const app = createApp({ db })
+  const cookie = await authCookie(app)
+
+  const response = await app.inject({
+    method: 'POST',
+    url: '/api/auth/delete-account',
+    headers: { cookie },
+    payload: { confirmation: 'delete' },
+  })
+
+  assert.equal(response.statusCode, 400)
+  assert.equal(tableCount(db, 'users'), 1)
+
+  await closeTestApp(app, db)
+})
+
+test('delete account clears sessions, users, and app data within app scope', async () => {
+  const db = testDb()
+  const uploadDir = testUploadDir()
+  const app = createApp({ db, uploadDir })
+  const cookie = await authCookie(app)
+
+  await app.inject({
+    method: 'POST',
+    url: '/api/items/notes',
+    headers: { cookie },
+    payload: { body: 'delete me' },
+  })
+  await app.inject({
+    method: 'PATCH',
+    url: '/api/settings',
+    headers: { cookie },
+    payload: { defaultReminderAdvanceMinutes: 30 },
+  })
+  const upload = await app.inject(
+    uploadRequest({
+      filename: 'delete.txt',
+      mimeType: 'text/plain',
+      body: Buffer.from('delete file'),
+      cookie,
+    }),
+  )
+  const storedName = (
+    db.prepare('SELECT stored_name FROM files').get() as { stored_name: string }
+  ).stored_name
+  assert.equal(upload.statusCode, 201)
+  assert.equal(existsSync(join(uploadDir, storedName)), true)
+
+  const response = await app.inject({
+    method: 'POST',
+    url: '/api/auth/delete-account',
+    headers: { cookie },
+    payload: { confirmation: 'DELETE' },
+  })
+
+  assert.equal(response.statusCode, 200)
+  assert.equal(tableCount(db, 'users'), 0)
+  assert.equal(tableCount(db, 'sessions'), 0)
+  assert.equal(tableCount(db, 'items'), 0)
+  assert.equal(tableCount(db, 'app_settings'), 0)
+  assert.equal(existsSync(join(uploadDir, storedName)), false)
+
+  await closeTestApp(app, db)
+  rmSync(uploadDir, { recursive: true, force: true })
+})
+
+test('delete account invalidates old session, blocks old login, and reopens setup', async () => {
+  const db = testDb()
+  const app = createApp({ db })
+  const password = 'correct horse battery staple'
+
+  const setupResponse = await app.inject({
+    method: 'POST',
+    url: '/api/auth/setup',
+    payload: { username: 'deleted-user', password },
+  })
+  const cookie = cookieFromResponse(setupResponse)
+  const loginBeforeDelete = await app.inject({
+    method: 'POST',
+    url: '/api/auth/login',
+    payload: { password },
+  })
+  const deleteResponse = await app.inject({
+    method: 'POST',
+    url: '/api/auth/delete-account',
+    headers: { cookie },
+    payload: { confirmation: 'DELETE' },
+  })
+  const oldSessionResponse = await app.inject({
+    url: '/api/items',
+    headers: { cookie },
+  })
+  const oldLoginResponse = await app.inject({
+    method: 'POST',
+    url: '/api/auth/login',
+    payload: { password },
+  })
+  const meResponse = await app.inject({
+    url: '/api/auth/me',
+    headers: { cookie },
+  })
+  const setupAgainResponse = await app.inject({
+    method: 'POST',
+    url: '/api/auth/setup',
+    payload: { username: 'deleted-user', password },
+  })
+
+  assert.equal(loginBeforeDelete.statusCode, 200)
+  assert.equal(deleteResponse.statusCode, 200)
+  assert.match(String(deleteResponse.headers['set-cookie']), /Max-Age=0/)
+  assert.equal(oldSessionResponse.statusCode, 401)
+  assert.equal(oldLoginResponse.statusCode, 401)
+  assert.deepEqual(meResponse.json(), {
+    authenticated: false,
+    setupRequired: true,
+    user: null,
+  })
+  assert.equal(setupAgainResponse.statusCode, 201)
+
+  await closeTestApp(app, db)
+})
+
+test('frontend delete-account flow asks auth/me which screen is required after deletion', () => {
+  const source = appSource()
+  const deleteScreen = sourceBetween(
+    source,
+    'function DeleteAccountScreen',
+    'function SettingsScreen',
+  )
+  const appComponent = sourceBetween(source, 'function App()', 'export default App')
+
+  assert.match(deleteScreen, /\/api\/auth\/delete-account/)
+  assert.match(deleteScreen, /await onDeleted\(\)/)
+  assert.match(appComponent, /async function handleDeleted/)
+  assert.match(appComponent, /\/api\/auth\/me/)
 })

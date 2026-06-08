@@ -54,11 +54,57 @@ export const searchQuerySchema = z.object({
   type: z.string().trim().optional(),
 })
 
+export const usernameSchema = z.string().trim().min(1).max(80)
+
 export const setupInputSchema = z.object({
-  username: z.string().trim().min(1).max(80).optional(),
+  username: usernameSchema.optional(),
   password: z.string().min(8).max(200),
 })
 
 export const loginInputSchema = z.object({
+  username: usernameSchema.optional(),
   password: z.string().min(1).max(200),
+})
+
+export const changePasswordInputSchema = z
+  .object({
+    currentPassword: z.string().min(1).max(200),
+    newPassword: z.string().min(8).max(200),
+  })
+  .refine((value) => value.currentPassword !== value.newPassword, {
+    message: 'New password must be different',
+    path: ['newPassword'],
+  })
+
+export const updateUsernameInputSchema = z.object({
+  username: usernameSchema,
+})
+
+export const deleteAccountInputSchema = z.object({
+  confirmation: z.literal('DELETE'),
+})
+
+export const settingsPatchSchema = z.object({
+  defaultReminderAdvanceMinutes: z
+    .union([
+      z.literal(0),
+      z.literal(5),
+      z.literal(15),
+      z.literal(30),
+      z.literal(60),
+      z.literal(120),
+      z.literal(1440),
+    ])
+    .optional(),
+})
+
+export const exportInputSchema = z.object({
+  format: z.enum(['plain', 'encrypted']),
+  password: z.string().max(200).optional(),
+})
+
+export const importInputSchema = z.object({
+  format: z.enum(['plain', 'encrypted']),
+  password: z.string().max(200).optional(),
+  payload: z.unknown(),
 })

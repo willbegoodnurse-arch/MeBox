@@ -1,11 +1,15 @@
 import Fastify from 'fastify'
 import type Database from 'better-sqlite3'
 import type { IncomingHttpHeaders } from 'node:http'
+import { readFileSync } from 'node:fs'
+import { resolve } from 'node:path'
+import { deleteLocalAccountData } from './account'
 import { listAlerts } from './alerts'
 import {
   AuthError,
   SESSION_COOKIE_NAME,
   SESSION_TTL_SECONDS,
+  changePassword,
   createFirstUser,
   createSession,
   hasUser,
@@ -13,9 +17,18 @@ import {
   makeSessionCookie,
   parseCookie,
   revokeSession,
+  updateUsername,
   validateSession,
   verifyLogin,
 } from './auth'
+import {
+  DataError,
+  decryptExport,
+  encryptExport,
+  exportAppData,
+  importAppData,
+  parseImportPayload,
+} from './data'
 import {
   MAX_UPLOAD_BYTES,
   UploadValidationError,
@@ -25,8 +38,13 @@ import {
   storeUpload,
 } from './files'
 import { getItem, listInboxItems, type ItemRow } from './items'
+import { getDefaultReminderAdvance, setDefaultReminderAdvance } from './settings'
 import {
   announcementInputSchema,
+  changePasswordInputSchema,
+  deleteAccountInputSchema,
+  exportInputSchema,
+  importInputSchema,
   loginInputSchema,
   linkInputSchema,
   listInputSchema,
@@ -34,8 +52,10 @@ import {
   paginationSchema,
   recurringExpenseInputSchema,
   searchQuerySchema,
+  settingsPatchSchema,
   setupInputSchema,
   todoInputSchema,
+  updateUsernameInputSchema,
 } from './validation'
 
 type AppOptions = {
@@ -89,6 +109,36 @@ function safeUser(user: { id: number; username: string }) {
   }
 }
 
+function appVersion() {
+  try {
+    const packageJson = JSON.parse(
+      readFileSync(resolve(process.cwd(), 'package.json'), 'utf8'),
+    ) as { version?: string }
+    return packageJson.version ?? '0.0.0'
+  } catch {
+    return '0.0.0'
+  }
+}
+
+function currentSession(db: Database.Database, cookieHeader: string | undefined) {
+  const token = parseCookie(cookieHeader, SESSION_COOKIE_NAME)
+  const session = validateSession(db, token)
+
+  return { token, session }
+}
+
+function parseSubmittedImportPayload(payload: unknown) {
+  if (typeof payload !== 'string') {
+    return payload
+  }
+
+  try {
+    return JSON.parse(payload) as unknown
+  } catch {
+    throw new DataError('Invalid import file')
+  }
+}
+
 export function createApp({ db, uploadDir = 'uploads' }: AppOptions) {
   const app = Fastify({ logger: false, bodyLimit: MAX_UPLOAD_BYTES })
 
@@ -112,6 +162,11 @@ export function createApp({ db, uploadDir = 'uploads' }: AppOptions) {
     }
 
     if (error instanceof AuthError) {
+      reply.code(error.statusCode).send({ error: error.message })
+      return
+    }
+
+    if (error instanceof DataError) {
       reply.code(error.statusCode).send({ error: error.message })
       return
     }
@@ -217,6 +272,99 @@ export function createApp({ db, uploadDir = 'uploads' }: AppOptions) {
       makeLogoutCookie(shouldUseSecureCookie(request.headers)),
     )
     return { ok: true }
+  })
+
+  app.post('/api/auth/change-password', async (request) => {
+    const input = parseBody(changePasswordInputSchema, request.body)
+    const { token } = currentSession(db, request.headers.cookie)
+    const user = await changePassword(db, {
+      currentPassword: input.currentPassword,
+      newPassword: input.newPassword,
+      currentToken: token,
+    })
+
+    return {
+      ok: true,
+      user: safeUser(user),
+      sessionPolicy: 'current_session_kept_other_sessions_revoked',
+    }
+  })
+
+  app.patch('/api/auth/username', async (request) => {
+    const input = parseBody(updateUsernameInputSchema, request.body)
+    const user = updateUsername(db, input.username)
+
+    return {
+      ok: true,
+      user: safeUser(user),
+    }
+  })
+
+  app.post('/api/auth/delete-account', async (request, reply) => {
+    parseBody(deleteAccountInputSchema, request.body)
+    deleteLocalAccountData(db, uploadDir)
+    reply.header(
+      'set-cookie',
+      makeLogoutCookie(shouldUseSecureCookie(request.headers)),
+    )
+    return { ok: true }
+  })
+
+  app.get('/api/settings', async (request) => {
+    const { session } = currentSession(db, request.headers.cookie)
+
+    return {
+      user: session ? safeUser(session.user) : null,
+      version: appVersion(),
+      defaultReminderAdvanceMinutes: getDefaultReminderAdvance(db),
+      reminderAdvanceOptions: [0, 5, 15, 30, 60, 120, 1440],
+    }
+  })
+
+  app.patch('/api/settings', async (request) => {
+    const input = parseBody(settingsPatchSchema, request.body)
+    const value =
+      input.defaultReminderAdvanceMinutes === undefined
+        ? getDefaultReminderAdvance(db)
+        : setDefaultReminderAdvance(db, input.defaultReminderAdvanceMinutes)
+
+    return {
+      defaultReminderAdvanceMinutes: value,
+    }
+  })
+
+  app.post('/api/data/export', async (request, reply) => {
+    const input = parseBody(exportInputSchema, request.body)
+    const payload = exportAppData(db)
+    const filename =
+      input.format === 'encrypted' ? 'mebox-export.encrypted.json' : 'mebox-export.json'
+    const body =
+      input.format === 'encrypted'
+        ? encryptExport(payload, input.password ?? '')
+        : payload
+
+    reply
+      .header('content-type', 'application/json; charset=utf-8')
+      .header('content-disposition', `attachment; filename="${filename}"`)
+      .header('cache-control', 'no-store')
+
+    return body
+  })
+
+  app.post('/api/data/import', async (request) => {
+    const input = parseBody(importInputSchema, request.body)
+    const submittedPayload = parseSubmittedImportPayload(input.payload)
+    const payload =
+      input.format === 'encrypted'
+        ? decryptExport(submittedPayload, input.password ?? '')
+        : parseImportPayload(submittedPayload)
+    const result = importAppData(db, payload)
+
+    return {
+      ok: true,
+      importedItems: result.importedItems,
+      filesRestored: false,
+    }
   })
 
   app.get('/api/items', async (request) => {

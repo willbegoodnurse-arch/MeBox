@@ -37,7 +37,7 @@ function expiresAt(now = new Date()) {
   return new Date(now.getTime() + SESSION_TTL_SECONDS * 1000).toISOString()
 }
 
-function hashSessionToken(token: string) {
+export function hashSessionToken(token: string) {
   return createHash('sha256').update(token).digest('hex')
 }
 
@@ -72,13 +72,13 @@ export async function createFirstUser(
 
 export async function verifyLogin(
   db: Database.Database,
-  input: { password: string },
+  input: { username?: string; password: string },
 ) {
   const user = db
     .prepare('SELECT id, username, password_hash FROM users WHERE id = 1')
     .get() as UserRow | undefined
 
-  if (!user) {
+  if (!user || (input.username !== undefined && input.username.trim() !== user.username)) {
     throw new AuthError('Invalid password', 401)
   }
 
@@ -88,6 +88,50 @@ export async function verifyLogin(
   }
 
   return { id: user.id, username: user.username }
+}
+
+export async function changePassword(
+  db: Database.Database,
+  input: { currentPassword: string; newPassword: string; currentToken?: string },
+) {
+  const user = db
+    .prepare('SELECT id, username, password_hash FROM users WHERE id = 1')
+    .get() as UserRow | undefined
+
+  if (!user) {
+    throw new AuthError('Invalid password', 401)
+  }
+
+  const ok = await argon2.verify(user.password_hash, input.currentPassword)
+  if (!ok) {
+    throw new AuthError('Invalid password', 401)
+  }
+
+  const passwordHash = await argon2.hash(input.newPassword, {
+    type: argon2.argon2id,
+  })
+  db.prepare(
+    "UPDATE users SET password_hash = ?, updated_at = datetime('now') WHERE id = 1",
+  ).run(passwordHash)
+
+  revokeOtherSessions(db, input.currentToken)
+  return { id: user.id, username: user.username }
+}
+
+export function updateUsername(db: Database.Database, username: string) {
+  const user = db
+    .prepare('SELECT id FROM users WHERE id = 1')
+    .get() as { id: number } | undefined
+
+  if (!user) {
+    throw new AuthError('Authentication required', 401)
+  }
+
+  db.prepare(
+    "UPDATE users SET username = ?, updated_at = datetime('now') WHERE id = 1",
+  ).run(username)
+
+  return { id: user.id, username }
 }
 
 export function createSession(db: Database.Database, userId: number, now = new Date()) {
@@ -148,6 +192,21 @@ export function revokeSession(db: Database.Database, token: string | undefined) 
     `UPDATE sessions
      SET revoked_at = ?
      WHERE token_hash = ? AND revoked_at IS NULL`,
+  ).run(nowIso(), hashSessionToken(token))
+}
+
+export function revokeOtherSessions(db: Database.Database, token: string | undefined) {
+  if (!token) {
+    db.prepare("UPDATE sessions SET revoked_at = ? WHERE revoked_at IS NULL").run(
+      nowIso(),
+    )
+    return
+  }
+
+  db.prepare(
+    `UPDATE sessions
+     SET revoked_at = ?
+     WHERE token_hash != ? AND revoked_at IS NULL`,
   ).run(nowIso(), hashSessionToken(token))
 }
 
