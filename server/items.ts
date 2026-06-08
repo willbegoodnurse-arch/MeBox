@@ -108,7 +108,7 @@ export function getItem(db: Database.Database, id: number) {
 export function listInboxItems(db: Database.Database, limit: number, offset: number) {
   const rows = db
     .prepare(
-      'SELECT * FROM items ORDER BY datetime(created_at) DESC, id DESC LIMIT ? OFFSET ?',
+      'SELECT * FROM items ORDER BY datetime(created_at) ASC, id ASC LIMIT ? OFFSET ?',
     )
     .all(limit, offset) as ItemRow[]
 

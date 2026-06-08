@@ -1,14 +1,15 @@
-import { useEffect, useState, type FormEvent, type ReactNode } from 'react'
+import { useEffect, useMemo, useRef, useState, type FormEvent, type ReactNode } from 'react'
+import {
+  categoryForItemType,
+  categoryLabels,
+  filterItemsByCategory,
+  formatDateTitle,
+  formatMessageTime,
+  sortItemsOldestFirst,
+  type CategoryLabel,
+  type ItemType,
+} from './inboxDisplay'
 import './App.css'
-
-type ItemType =
-  | 'note'
-  | 'link'
-  | 'todo'
-  | 'list'
-  | 'file'
-  | 'announcement'
-  | 'recurring_expense'
 
 type InboxItem = {
   id: number
@@ -62,23 +63,24 @@ type CreateType =
   | 'recurring_expense'
 
 const createTypes: { type: CreateType; label: string }[] = [
-  { type: 'note', label: '메모' },
-  { type: 'link', label: '링크' },
-  { type: 'todo', label: '할일' },
-  { type: 'list', label: '리스트' },
-  { type: 'file', label: '파일' },
-  { type: 'announcement', label: '공지' },
-  { type: 'recurring_expense', label: '지출' },
+  { type: 'note', label: 'Chat' },
+  { type: 'link', label: 'Link' },
+  { type: 'todo', label: 'Reminders' },
+  { type: 'list', label: 'List' },
+  { type: 'file', label: 'File' },
+  { type: 'announcement', label: 'Notification' },
+  { type: 'recurring_expense', label: 'Fixed' },
 ]
 
-const searchTypes: { type: ItemType | 'all'; label: string }[] = [
-  { type: 'all', label: '전체' },
-  { type: 'note', label: '메모' },
-  { type: 'link', label: '링크' },
-  { type: 'todo', label: '할일' },
-  { type: 'file', label: '파일' },
-  { type: 'announcement', label: '공지' },
-  { type: 'recurring_expense', label: '지출' },
+const searchTypes: { type: ItemType | 'all'; label: CategoryLabel }[] = [
+  { type: 'all', label: 'All' },
+  { type: 'note', label: 'Chat' },
+  { type: 'link', label: 'Link' },
+  { type: 'todo', label: 'Reminders' },
+  { type: 'list', label: 'List' },
+  { type: 'file', label: 'File' },
+  { type: 'announcement', label: 'Notification' },
+  { type: 'recurring_expense', label: 'Fixed' },
 ]
 
 const reminderOptions = [
@@ -149,57 +151,14 @@ function formatBytes(value: number) {
 }
 
 function typeLabel(type: ItemType) {
-  switch (type) {
-    case 'note':
-      return '메모'
-    case 'link':
-      return '링크'
-    case 'todo':
-      return '할일'
-    case 'list':
-      return '리스트'
-    case 'file':
-      return '파일'
-    case 'announcement':
-      return '공지'
-    case 'recurring_expense':
-      return '지출'
-  }
-}
-
-function dateTitle(value: string) {
-  const date = new Date(value)
-  const today = new Date()
-  const yesterday = new Date()
-  yesterday.setDate(today.getDate() - 1)
-
-  if (date.toDateString() === today.toDateString()) {
-    return '오늘'
-  }
-
-  if (date.toDateString() === yesterday.toDateString()) {
-    return '어제'
-  }
-
-  return new Intl.DateTimeFormat('ko-KR', {
-    month: 'long',
-    day: 'numeric',
-    weekday: 'short',
-  }).format(date)
-}
-
-function timeText(value: string) {
-  return new Intl.DateTimeFormat('ko-KR', {
-    hour: '2-digit',
-    minute: '2-digit',
-  }).format(new Date(value))
+  return categoryForItemType(type)
 }
 
 function groupItems(items: InboxItem[]) {
   const groups: { title: string; items: InboxItem[] }[] = []
 
   for (const item of items) {
-    const title = dateTitle(item.createdAt)
+    const title = formatDateTitle(item.createdAt)
     const group = groups.find((entry) => entry.title === title)
 
     if (group) {
@@ -303,7 +262,7 @@ function MessageBubble({ item }: { item: InboxItem }) {
     <article className={`message-bubble message-${item.type}`}>
       <div className="message-label">
         <span>{typeLabel(item.type)}</span>
-        <time>{timeText(item.createdAt)}</time>
+        <time>{formatMessageTime(item.createdAt)}</time>
       </div>
 
       {item.type === 'note' && <p className="message-text">{asText(detail.text)}</p>}
@@ -312,7 +271,14 @@ function MessageBubble({ item }: { item: InboxItem }) {
         <div className="message-stack">
           <strong>{asText(detail.title) || asText(detail.url)}</strong>
           {asText(detail.memo) && <p>{asText(detail.memo)}</p>}
-          <span className="message-url">{asText(detail.url)}</span>
+          <a
+            className="message-url"
+            href={asText(detail.url)}
+            rel="noreferrer noopener"
+            target="_blank"
+          >
+            {asText(detail.url)}
+          </a>
         </div>
       )}
 
@@ -358,7 +324,7 @@ function MessageBubble({ item }: { item: InboxItem }) {
 
       {item.type === 'announcement' && (
         <div className="message-stack">
-          <strong>{asText(detail.title) || '공지'}</strong>
+          <strong>{asText(detail.title) || 'Notification'}</strong>
           <p>{asText(detail.body)}</p>
         </div>
       )}
@@ -406,7 +372,7 @@ function Header({
     <header className="chat-header">
       <div>
         <h1>MeBox</h1>
-        <p>{alerts.length ? `${alerts.length}개 알림` : '개인 인박스'}</p>
+        {alerts.length > 0 && <p>{alerts.length}개 알림</p>}
       </div>
       <button aria-label="검색 열기" className="icon-button" onClick={onSearch} type="button">
         ⌕
@@ -642,12 +608,40 @@ function InboxScreen({
   onCreated: (item: InboxItem) => void
   onSearch: () => void
 }) {
+  const [activeCategory, setActiveCategory] = useState<CategoryLabel>('All')
+  const timelineRef = useRef<HTMLDivElement | null>(null)
+  const visibleItems = useMemo(
+    () => sortItemsOldestFirst(filterItemsByCategory(items, activeCategory)),
+    [activeCategory, items],
+  )
+
+  useEffect(() => {
+    const timeline = timelineRef.current
+    if (timeline) {
+      timeline.scrollTop = timeline.scrollHeight
+    }
+  }, [visibleItems.length])
+
   return (
     <>
       <main className="screen inbox-screen">
         <Header alerts={alerts} onSearch={onSearch} />
         <AlertStrip alerts={alerts} />
-        <Timeline items={items} />
+        <div className="category-filter-row" aria-label="Inbox category filter">
+          {categoryLabels.map((category) => (
+            <button
+              className={category === activeCategory ? 'selected' : ''}
+              key={category}
+              onClick={() => setActiveCategory(category)}
+              type="button"
+            >
+              {category}
+            </button>
+          ))}
+        </div>
+        <div className="timeline-scroll" ref={timelineRef}>
+          <Timeline items={visibleItems} />
+        </div>
       </main>
       <Composer onCreated={onCreated} />
     </>
@@ -1453,7 +1447,7 @@ function App() {
             alerts={alerts}
             items={items}
             onCreated={(item) => {
-              setItems((current) => [item, ...current])
+              setItems((current) => [...current, item])
               void refreshInbox()
             }}
             onSearch={() => setActiveNav('search')}

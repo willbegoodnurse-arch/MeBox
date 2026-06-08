@@ -111,6 +111,37 @@ test('creates and lists note items', async () => {
   await closeTestApp(app, db)
 })
 
+test('lists inbox items oldest to newest', async () => {
+  const db = testDb()
+  const app = createApp({ db })
+  const cookie = await authCookie(app)
+
+  await app.inject({
+    method: 'POST',
+    url: '/api/items/notes',
+    headers: { cookie },
+    payload: { body: 'oldest note' },
+  })
+  await app.inject({
+    method: 'POST',
+    url: '/api/items/notes',
+    headers: { cookie },
+    payload: { body: 'newest note' },
+  })
+  const response = await app.inject({
+    url: '/api/items',
+    headers: { cookie },
+  })
+  const payload = response.json()
+
+  assert.deepEqual(
+    payload.items.map((item: { detail: { text: string } }) => item.detail.text),
+    ['oldest note', 'newest note'],
+  )
+
+  await closeTestApp(app, db)
+})
+
 test('searches notes and links without requiring external services', async () => {
   const db = testDb()
   const app = createApp({ db })

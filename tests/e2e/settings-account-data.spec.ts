@@ -187,6 +187,50 @@ test('username change invalidates the old username and allows login with the new
   await expectMainApp(page)
 })
 
+test('inbox category filters preserve oldest-to-newest order and render links as anchors', async ({
+  page,
+}) => {
+  await createAccount(page)
+  const items = await createInboxFixture(page, 'category-filter')
+  const categoryRow = page.locator('.category-filter-row')
+
+  await expect(categoryRow.getByRole('button')).toHaveText([
+    'All',
+    'Chat',
+    'Link',
+    'Reminders',
+    'List',
+    'File',
+    'Notification',
+    'Fixed',
+  ])
+  await expect(page.getByText('개인 인박스')).toHaveCount(0)
+
+  await expect(page.locator('.message-bubble')).toHaveCount(3)
+  await expect(page.locator('.message-bubble').nth(0)).toContainText(items.note)
+  await expect(page.locator('.message-bubble').nth(1)).toContainText(items.linkTitle)
+  await expect(page.locator('.message-bubble').nth(2)).toContainText(items.todo)
+
+  const link = page.locator('.message-link a.message-url')
+  await expect(link).toHaveAttribute('href', 'https://example.test/category-filter')
+  await expect(link).toHaveAttribute('target', '_blank')
+  await expect(link).toHaveAttribute('rel', 'noreferrer noopener')
+
+  await categoryRow.getByRole('button', { name: 'Link' }).click()
+  await expect(page.getByText(items.linkTitle)).toBeVisible()
+  await expect(page.getByText(items.note)).toBeHidden()
+  await expect(page.getByText(items.todo)).toBeHidden()
+
+  await categoryRow.getByRole('button', { name: 'Reminders' }).click()
+  await expect(page.getByText(items.todo)).toBeVisible()
+  await expect(page.getByText(items.linkTitle)).toBeHidden()
+
+  await categoryRow.getByRole('button', { name: 'All' }).click()
+  await expect(page.getByText(items.note)).toBeVisible()
+  await expect(page.getByText(items.linkTitle)).toBeVisible()
+  await expect(page.getByText(items.todo)).toBeVisible()
+})
+
 test('plain JSON export/import round trip restores visible inbox items after reload', async ({
   page,
 }, testInfo) => {

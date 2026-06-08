@@ -46,10 +46,17 @@
 }
 
 .inbox-screen {
+  display: flex;
+  flex-direction: column;
+  height: 100svh;
+  min-height: 0;
+  overflow: hidden;
   padding-bottom: 148px;
 }
 
 .plain-screen {
+  max-height: 100%;
+  overflow-y: auto;
   padding-top: 16px;
 }
 
@@ -185,6 +192,14 @@ button:disabled {
   gap: 10px;
 }
 
+.timeline-scroll {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding-bottom: 10px;
+}
+
 .timeline {
   padding-top: 12px;
 }
@@ -220,18 +235,45 @@ button:disabled {
   overflow-wrap: anywhere;
 }
 
-.message-link,
-.message-list,
-.message-file,
-.message-announcement,
-.message-recurring_expense {
-  background: var(--bubble);
-  color: var(--text);
-  border: 1px solid rgba(255, 255, 255, 0.04);
+.message-note {
+  background: #1f5faa;
+  color: #ffffff;
+}
+
+.message-link {
+  background: #173a42;
+  color: #f0fcff;
+  border: 1px solid rgba(107, 213, 232, 0.2);
+}
+
+.message-todo {
+  background: #3c3320;
+  color: #fff8ea;
+  border: 1px solid rgba(246, 199, 110, 0.22);
+}
+
+.message-list {
+  background: #28334b;
+  color: #f4f7ff;
+  border: 1px solid rgba(147, 171, 232, 0.2);
+}
+
+.message-file {
+  background: #243642;
+  color: #f4fbff;
+  border: 1px solid rgba(125, 190, 226, 0.18);
 }
 
 .message-announcement {
-  border-color: rgba(246, 199, 110, 0.2);
+  background: #3b283b;
+  color: #fff6ff;
+  border: 1px solid rgba(231, 146, 221, 0.2);
+}
+
+.message-recurring_expense {
+  background: #233a2d;
+  color: #f2fff7;
+  border: 1px solid rgba(124, 210, 151, 0.2);
 }
 
 .message-label {
@@ -269,7 +311,7 @@ button:disabled {
 .message-stack span,
 .message-url,
 .attachment-line small {
-  color: var(--text-soft);
+  color: rgba(255, 255, 255, 0.78);
   font-size: 12px;
   font-weight: 400;
   line-height: 1.38;
@@ -277,6 +319,10 @@ button:disabled {
 
 .message-url {
   display: block;
+  color: inherit;
+  text-decoration: underline;
+  text-decoration-color: rgba(255, 255, 255, 0.45);
+  text-underline-offset: 3px;
 }
 
 .todo-line,
@@ -418,7 +464,8 @@ button:disabled {
 }
 
 .create-sheet button,
-.filter-row button {
+.filter-row button,
+.category-filter-row button {
   border: 1px solid var(--line);
   border-radius: 999px;
   background: var(--panel-raised);
@@ -430,10 +477,23 @@ button:disabled {
 }
 
 .create-sheet button.selected,
-.filter-row button.selected {
+.filter-row button.selected,
+.category-filter-row button.selected {
   border-color: var(--accent);
   background: var(--accent-soft);
   color: var(--text);
+}
+
+.category-filter-row {
+  display: flex;
+  gap: 8px;
+  overflow-x: auto;
+  padding: 10px 0 2px;
+  scrollbar-width: none;
+}
+
+.category-filter-row::-webkit-scrollbar {
+  display: none;
 }
 
 .detail-tray {
@@ -779,10 +839,15 @@ button:disabled {
   }
 
   .phone-shell {
+    height: min(860px, calc(100svh - 56px));
     min-height: min(860px, calc(100svh - 56px));
     border: 1px solid var(--line);
     border-radius: 28px;
     box-shadow: var(--shadow);
+  }
+
+  .inbox-screen {
+    height: 100%;
   }
 
   .composer,
