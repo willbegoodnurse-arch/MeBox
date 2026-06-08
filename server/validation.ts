@@ -62,6 +62,7 @@ export const setupInputSchema = z.object({
 })
 
 export const loginInputSchema = z.object({
+  username: usernameSchema.optional(),
   password: z.string().min(1).max(200),
 })
 

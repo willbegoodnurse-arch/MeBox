@@ -72,13 +72,13 @@ export async function createFirstUser(
 
 export async function verifyLogin(
   db: Database.Database,
-  input: { password: string },
+  input: { username?: string; password: string },
 ) {
   const user = db
     .prepare('SELECT id, username, password_hash FROM users WHERE id = 1')
     .get() as UserRow | undefined
 
-  if (!user) {
+  if (!user || (input.username !== undefined && input.username.trim() !== user.username)) {
     throw new AuthError('Invalid password', 401)
   }
 

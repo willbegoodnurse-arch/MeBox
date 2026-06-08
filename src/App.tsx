@@ -92,13 +92,15 @@ const reminderOptions = [
 ]
 
 async function apiFetch<T>(path: string, init?: RequestInit): Promise<T> {
+  const headers = new Headers(init?.headers)
+  if (init?.body !== undefined && !headers.has('Content-Type')) {
+    headers.set('Content-Type', 'application/json')
+  }
+
   const response = await fetch(path, {
     credentials: 'same-origin',
     ...init,
-    headers: {
-      'Content-Type': 'application/json',
-      ...init?.headers,
-    },
+    headers,
   })
 
   if (!response.ok) {
@@ -244,9 +246,7 @@ function AuthScreen({
         mode === 'setup' ? '/api/auth/setup' : '/api/auth/login',
         {
           method: 'POST',
-          body: JSON.stringify(
-            mode === 'setup' ? { username, password } : { password },
-          ),
+          body: JSON.stringify({ username, password }),
         },
       )
       setPassword('')
@@ -267,16 +267,14 @@ function AuthScreen({
           <p>개인 Tailnet 안에서 쓰는 나와의 인박스</p>
         </div>
 
-        {mode === 'setup' && (
-          <label>
-            사용자 이름
-            <input
-              autoComplete="username"
-              onChange={(event) => setUsername(event.target.value)}
-              value={username}
-            />
-          </label>
-        )}
+        <label>
+          사용자 이름
+          <input
+            autoComplete="username"
+            onChange={(event) => setUsername(event.target.value)}
+            value={username}
+          />
+        </label>
 
         <label>
           비밀번호
@@ -290,7 +288,7 @@ function AuthScreen({
 
         {error && <p className="form-error">{error}</p>}
 
-        <button disabled={isSubmitting || password.length < 8} type="submit">
+        <button disabled={isSubmitting || !username.trim() || password.length < 8} type="submit">
           {mode === 'setup' ? '설정 완료' : '로그인'}
         </button>
       </form>
@@ -1396,7 +1394,6 @@ function App() {
 
   async function handleImported() {
     await refreshInbox()
-    setActiveNav('inbox')
   }
 
   useEffect(() => {
