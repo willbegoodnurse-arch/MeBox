@@ -127,6 +127,18 @@ function currentSession(db: Database.Database, cookieHeader: string | undefined)
   return { token, session }
 }
 
+function parseSubmittedImportPayload(payload: unknown) {
+  if (typeof payload !== 'string') {
+    return payload
+  }
+
+  try {
+    return JSON.parse(payload) as unknown
+  } catch {
+    throw new DataError('Invalid import file')
+  }
+}
+
 export function createApp({ db, uploadDir = 'uploads' }: AppOptions) {
   const app = Fastify({ logger: false, bodyLimit: MAX_UPLOAD_BYTES })
 
@@ -341,10 +353,11 @@ export function createApp({ db, uploadDir = 'uploads' }: AppOptions) {
 
   app.post('/api/data/import', async (request) => {
     const input = parseBody(importInputSchema, request.body)
+    const submittedPayload = parseSubmittedImportPayload(input.payload)
     const payload =
       input.format === 'encrypted'
-        ? decryptExport(input.payload, input.password ?? '')
-        : parseImportPayload(input.payload)
+        ? decryptExport(submittedPayload, input.password ?? '')
+        : parseImportPayload(submittedPayload)
     const result = importAppData(db, payload)
 
     return {

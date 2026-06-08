@@ -1033,7 +1033,13 @@ function ExportDataScreen({ onBack }: { onBack: () => void }) {
   )
 }
 
-function ImportDataScreen({ onBack }: { onBack: () => void }) {
+function ImportDataScreen({
+  onBack,
+  onImported,
+}: {
+  onBack: () => void
+  onImported: () => Promise<void>
+}) {
   const [format, setFormat] = useState<'plain' | 'encrypted'>('plain')
   const [password, setPassword] = useState('')
   const [file, setFile] = useState<File | null>(null)
@@ -1060,6 +1066,7 @@ function ImportDataScreen({ onBack }: { onBack: () => void }) {
         method: 'POST',
         body: JSON.stringify({ format, password: format === 'encrypted' ? password : undefined, payload }),
       })
+      await onImported()
       setMessage(`${response.importedItems}개 항목을 가져왔습니다.`)
       setPassword('')
       setFile(null)
@@ -1174,7 +1181,7 @@ function DeleteAccountScreen({
   onDeleted,
 }: {
   onBack: () => void
-  onDeleted: () => void
+  onDeleted: () => Promise<void>
 }) {
   const [confirmation, setConfirmation] = useState('')
   const [error, setError] = useState('')
@@ -1188,7 +1195,7 @@ function DeleteAccountScreen({
         method: 'POST',
         body: JSON.stringify({ confirmation }),
       })
-      onDeleted()
+      await onDeleted()
     } catch {
       setError('계정을 삭제하지 못했습니다. DELETE를 정확히 입력하세요.')
     }
@@ -1218,13 +1225,15 @@ function DeleteAccountScreen({
 
 function SettingsScreen({
   onDeleted,
+  onImported,
   onLogout,
   settings,
   setSettings,
   setUser,
   user,
 }: {
-  onDeleted: () => void
+  onDeleted: () => Promise<void>
+  onImported: () => Promise<void>
   onLogout: () => void
   settings: SettingsResponse | null
   setSettings: (settings: SettingsResponse | null) => void
@@ -1267,7 +1276,7 @@ function SettingsScreen({
   }
 
   if (view === 'importData') {
-    return <ImportDataScreen onBack={() => setView('home')} />
+    return <ImportDataScreen onBack={() => setView('home')} onImported={onImported} />
   }
 
   if (view === 'reminder') {
@@ -1376,13 +1385,18 @@ function App() {
     }
   }
 
-  function handleDeleted() {
+  async function handleDeleted() {
     setItems([])
     setAlerts([])
     setSettings(null)
     setUser(null)
     setActiveNav('inbox')
-    setAuthView('setup')
+    await refreshAuth()
+  }
+
+  async function handleImported() {
+    await refreshInbox()
+    setActiveNav('inbox')
   }
 
   useEffect(() => {
@@ -1428,6 +1442,7 @@ function App() {
         ) : activeNav === 'settings' ? (
           <SettingsScreen
             onDeleted={handleDeleted}
+            onImported={handleImported}
             onLogout={() => {
               void logout()
             }}
