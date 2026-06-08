@@ -88,10 +88,26 @@ async function createLink(page: Page, url: string, title: string) {
   await expect(page.getByText(title)).toBeVisible()
 }
 
+async function startLink(page: Page, url: string, title: string) {
+  await page.locator('.plus-button').click()
+  await page.locator('.create-sheet button').nth(1).click()
+  await page.locator('.detail-tray input').fill(title)
+  await page.locator('.composer-row input').fill(url)
+}
+
 async function createTodo(page: Page, title: string) {
   await page.locator('.plus-button').click()
   await page.locator('.create-sheet button').nth(2).click()
   await page.locator('.composer-row input').fill(title)
+  await page.locator('.send-button').click()
+  await expect(page.getByText(title)).toBeVisible()
+}
+
+async function createAnnouncement(page: Page, title: string, body: string) {
+  await page.locator('.plus-button').click()
+  await page.locator('.create-sheet button').nth(5).click()
+  await page.locator('.detail-tray input').fill(title)
+  await page.locator('.composer-row input').fill(body)
   await page.locator('.send-button').click()
   await expect(page.getByText(title)).toBeVisible()
 }
@@ -206,10 +222,24 @@ test('inbox category filters preserve oldest-to-newest order and render links as
   ])
   await expect(page.getByText('개인 인박스')).toHaveCount(0)
 
-  await expect(page.locator('.message-bubble')).toHaveCount(3)
-  await expect(page.locator('.message-bubble').nth(0)).toContainText(items.note)
-  await expect(page.locator('.message-bubble').nth(1)).toContainText(items.linkTitle)
-  await expect(page.locator('.message-bubble').nth(2)).toContainText(items.todo)
+  await expect(page.locator('.message-card')).toHaveCount(3)
+  await expect(page.locator('.message-card').nth(0)).toContainText(items.note)
+  await expect(page.locator('.message-card').nth(1)).toContainText(items.linkTitle)
+  await expect(page.locator('.message-card').nth(2)).toContainText(items.todo)
+  await expect(
+    await page.locator('.timeline-scroll').evaluate((node) => {
+      const distanceFromBottom = node.scrollHeight - node.clientHeight - node.scrollTop
+      return Math.abs(distanceFromBottom) <= 1
+    }),
+  ).toBe(true)
+  await expect(
+    await page.locator('.message-card').first().evaluate((card) => {
+      const categoryBottom = document
+        .querySelector('.category-filter-row')
+        ?.getBoundingClientRect().bottom
+      return categoryBottom === undefined || card.getBoundingClientRect().top >= categoryBottom
+    }),
+  ).toBe(true)
 
   const link = page.locator('.message-link a.message-url')
   await expect(link).toHaveAttribute('href', 'https://example.test/category-filter')
@@ -229,6 +259,39 @@ test('inbox category filters preserve oldest-to-newest order and render links as
   await expect(page.getByText(items.note)).toBeVisible()
   await expect(page.getByText(items.linkTitle)).toBeVisible()
   await expect(page.getByText(items.todo)).toBeVisible()
+})
+
+test('link input normalizes common URLs and rejects invalid URLs with a specific error', async ({
+  page,
+}) => {
+  await createAccount(page)
+  await startLink(page, 'WWW.NAVER.COM', 'Uppercase Naver')
+  await page.locator('.send-button').click()
+  await expect(page.getByText('Uppercase Naver')).toBeVisible()
+
+  const link = page.locator('.message-link a.message-url')
+  await expect(link).toHaveText('https://www.naver.com')
+  await expect(link).toHaveAttribute('href', 'https://www.naver.com')
+  await expect(link).toHaveAttribute('target', '_blank')
+  await expect(link).toHaveAttribute('rel', 'noreferrer noopener')
+
+  await startLink(page, 'not a url', 'Invalid URL')
+  await page.locator('.send-button').click()
+  await expect(page.getByText('올바른 URL을 입력하세요.')).toBeVisible()
+  await expect(page.getByText('Invalid URL')).toHaveCount(0)
+})
+
+test('only reminder cards render checkbox markers', async ({ page }) => {
+  await createAccount(page)
+  await createNote(page, 'No checkbox chat')
+  await createLink(page, 'https://example.test/no-checkbox', 'No checkbox link')
+  await createTodo(page, 'Reminder checkbox')
+  await createAnnouncement(page, 'No checkbox notification', 'Notification body')
+
+  await expect(page.locator('.message-note .todo-check')).toHaveCount(0)
+  await expect(page.locator('.message-link .todo-check')).toHaveCount(0)
+  await expect(page.locator('.message-announcement .todo-check')).toHaveCount(0)
+  await expect(page.locator('.message-todo .todo-check')).toHaveCount(1)
 })
 
 test('plain JSON export/import round trip restores visible inbox items after reload', async ({

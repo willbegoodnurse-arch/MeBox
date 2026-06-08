@@ -5,6 +5,7 @@ import {
   filterItemsByCategory,
   formatDateTitle,
   formatMessageTime,
+  normalizeLinkUrl,
   sortItemsOldestFirst,
   type CategoryLabel,
   type ItemType,
@@ -259,9 +260,9 @@ function MessageBubble({ item }: { item: InboxItem }) {
   const detail = item.detail ?? {}
 
   return (
-    <article className={`message-bubble message-${item.type}`}>
+    <article className={`message-card message-${item.type}`}>
       <div className="message-label">
-        <span>{typeLabel(item.type)}</span>
+        <span className="category-badge">{typeLabel(item.type)}</span>
         <time>{formatMessageTime(item.createdAt)}</time>
       </div>
 
@@ -284,7 +285,7 @@ function MessageBubble({ item }: { item: InboxItem }) {
 
       {item.type === 'todo' && (
         <div className="todo-line">
-          <span className="fake-check" aria-hidden="true">
+          <span className="todo-check" aria-hidden="true">
             {asText(detail.completedAt) ? '✓' : ''}
           </span>
           <span>{asText(detail.title)}</span>
@@ -299,7 +300,9 @@ function MessageBubble({ item }: { item: InboxItem }) {
               const listItem = row as Record<string, unknown>
               return (
                 <li key={String(listItem.id)}>
-                  <span aria-hidden="true">{asText(listItem.completedAt) ? '✓' : '□'}</span>
+                  <span className="list-marker" aria-hidden="true">
+                    •
+                  </span>
                   {asText(listItem.text)}
                 </li>
               )
@@ -323,7 +326,7 @@ function MessageBubble({ item }: { item: InboxItem }) {
       )}
 
       {item.type === 'announcement' && (
-        <div className="message-stack">
+        <div className="message-stack notification-content">
           <strong>{asText(detail.title) || 'Notification'}</strong>
           <p>{asText(detail.body)}</p>
         </div>
@@ -362,17 +365,17 @@ function Timeline({ items }: { items: InboxItem[] }) {
 }
 
 function Header({
-  alerts,
+  itemCount,
   onSearch,
 }: {
-  alerts: AlertItem[]
+  itemCount: number
   onSearch: () => void
 }) {
   return (
     <header className="chat-header">
       <div>
         <h1>MeBox</h1>
-        {alerts.length > 0 && <p>{alerts.length}개 알림</p>}
+        <p>{itemCount}개 항목</p>
       </div>
       <button aria-label="검색 열기" className="icon-button" onClick={onSearch} type="button">
         ⌕
@@ -447,8 +450,14 @@ function Composer({
       let payload: Record<string, unknown> = { body: draft }
 
       if (createType === 'link') {
+        const normalizedUrl = normalizeLinkUrl(draft)
+        if (!normalizedUrl) {
+          setError('올바른 URL을 입력하세요.')
+          return
+        }
+
         path = '/api/items/links'
-        payload = { url: draft, title: extra || undefined }
+        payload = { url: normalizedUrl, title: extra || undefined }
       } else if (createType === 'todo') {
         path = '/api/items/todos'
         payload = { title: draft, dueAt: extra ? new Date(extra).toISOString() : undefined }
@@ -625,7 +634,7 @@ function InboxScreen({
   return (
     <>
       <main className="screen inbox-screen">
-        <Header alerts={alerts} onSearch={onSearch} />
+        <Header itemCount={items.length} onSearch={onSearch} />
         <AlertStrip alerts={alerts} />
         <div className="category-filter-row" aria-label="Inbox category filter">
           {categoryLabels.map((category) => (

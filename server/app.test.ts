@@ -172,6 +172,43 @@ test('searches notes and links without requiring external services', async () =>
   await closeTestApp(app, db)
 })
 
+test('normalizes common link URLs before saving', async () => {
+  const db = testDb()
+  const app = createApp({ db })
+  const cookie = await authCookie(app)
+
+  const response = await app.inject({
+    method: 'POST',
+    url: '/api/items/links',
+    headers: { cookie },
+    payload: { url: 'WWW.NAVER.COM', title: 'Naver' },
+  })
+  const payload = response.json()
+
+  assert.equal(response.statusCode, 201)
+  assert.equal(payload.item.detail.url, 'https://www.naver.com')
+
+  await closeTestApp(app, db)
+})
+
+test('rejects clearly invalid link URLs', async () => {
+  const db = testDb()
+  const app = createApp({ db })
+  const cookie = await authCookie(app)
+
+  const response = await app.inject({
+    method: 'POST',
+    url: '/api/items/links',
+    headers: { cookie },
+    payload: { url: 'not a url', title: 'Invalid' },
+  })
+
+  assert.equal(response.statusCode, 400)
+  assert.equal(tableCount(db, 'links'), 0)
+
+  await closeTestApp(app, db)
+})
+
 test('returns overdue todo and recurring expense alerts', () => {
   const db = testDb()
   const itemId = Number(

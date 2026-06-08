@@ -6,6 +6,7 @@ import {
   filterItemsByCategory,
   formatDateTitle,
   formatMessageTime,
+  normalizeLinkUrl,
   sortItemsOldestFirst,
   type DisplayInboxItem,
 } from '../src/inboxDisplay'
@@ -72,4 +73,17 @@ test('local date formatting treats UTC sqlite timestamps using local browser tim
 
 test('message time is formatted from the parsed local browser time', () => {
   assert.equal(formatMessageTime('2026-06-07 15:30:00', 'en-US'), '12:30 AM')
+})
+
+test('common link URLs are normalized before saving', () => {
+  assert.equal(normalizeLinkUrl('naver.com'), 'https://naver.com')
+  assert.equal(normalizeLinkUrl('www.naver.com'), 'https://www.naver.com')
+  assert.equal(normalizeLinkUrl('WWW.NAVER.COM'), 'https://www.naver.com')
+  assert.equal(normalizeLinkUrl('https://Example.test/path'), 'https://example.test/path')
+})
+
+test('clearly invalid link URLs are rejected', () => {
+  assert.equal(normalizeLinkUrl('not a url'), null)
+  assert.equal(normalizeLinkUrl('justtext'), null)
+  assert.equal(normalizeLinkUrl('ftp://example.test'), null)
 })

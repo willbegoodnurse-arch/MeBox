@@ -34,6 +34,43 @@ export const categoryLabels: CategoryLabel[] = [
   'Fixed',
 ]
 
+export function normalizeLinkUrl(input: string) {
+  const trimmed = input.trim()
+
+  if (!trimmed || /\s/.test(trimmed)) {
+    return null
+  }
+
+  const withProtocol = /^[a-z][a-z0-9+.-]*:\/\//i.test(trimmed)
+    ? trimmed
+    : `https://${trimmed}`
+
+  try {
+    const url = new URL(withProtocol)
+    const protocol = url.protocol.toLowerCase()
+    const hostname = url.hostname.toLowerCase()
+
+    if (!['http:', 'https:'].includes(protocol)) {
+      return null
+    }
+
+    if (!hostname || (!hostname.includes('.') && hostname !== 'localhost')) {
+      return null
+    }
+
+    url.protocol = protocol
+    url.hostname = hostname
+
+    if ((url.pathname === '/' || url.pathname === '') && !url.search && !url.hash) {
+      return `${url.protocol}//${url.host}`
+    }
+
+    return url.toString()
+  } catch {
+    return null
+  }
+}
+
 export function categoryForItemType(type: ItemType): Exclude<CategoryLabel, 'All'> {
   switch (type) {
     case 'note':
