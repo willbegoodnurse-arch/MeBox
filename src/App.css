@@ -247,21 +247,20 @@ button:disabled {
   padding: 5px 10px;
 }
 
-.message-card {
+.message-bubble {
   --category-accent: #6f9dff;
   --category-badge-bg: rgba(111, 157, 255, 0.13);
   --category-badge-text: #c9dcff;
-  align-self: stretch;
-  width: 100%;
-  border: 1px solid rgba(255, 255, 255, 0.06);
-  border-left: 3px solid var(--category-accent);
-  border-radius: 8px;
-  background: #1b222b;
-  color: var(--text);
+  align-self: flex-end;
+  width: fit-content;
+  max-width: min(84%, 340px);
+  border-radius: 18px 18px 7px 18px;
+  background: var(--bubble-own);
+  color: var(--bubble-own-text);
   font-size: 15px;
   font-weight: 400;
   line-height: 1.48;
-  padding: 11px 12px 12px;
+  padding: 8px 11px;
   overflow-wrap: anywhere;
 }
 
@@ -653,6 +652,12 @@ button:disabled {
   gap: 8px;
   overflow-x: auto;
   padding-bottom: 12px;
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+}
+
+.filter-row::-webkit-scrollbar {
+  display: none;
 }
 
 .section-header {

@@ -73,17 +73,6 @@ const createTypes: { type: CreateType; label: string }[] = [
   { type: 'recurring_expense', label: 'Fixed' },
 ]
 
-const searchTypes: { type: ItemType | 'all'; label: CategoryLabel }[] = [
-  { type: 'all', label: 'All' },
-  { type: 'note', label: 'Chat' },
-  { type: 'link', label: 'Link' },
-  { type: 'todo', label: 'Reminders' },
-  { type: 'list', label: 'List' },
-  { type: 'file', label: 'File' },
-  { type: 'announcement', label: 'Notification' },
-  { type: 'recurring_expense', label: 'Fixed' },
-]
-
 const reminderOptions = [
   { label: 'At event time', value: 0 },
   { label: '5 minutes', value: 5 },
@@ -260,7 +249,7 @@ function MessageBubble({ item }: { item: InboxItem }) {
   const detail = item.detail ?? {}
 
   return (
-    <article className={`message-card message-${item.type}`}>
+    <article className={`message-bubble message-${item.type}`}>
       <div className="message-label">
         <span className="category-badge">{typeLabel(item.type)}</span>
         <time>{formatMessageTime(item.createdAt)}</time>
@@ -285,7 +274,7 @@ function MessageBubble({ item }: { item: InboxItem }) {
 
       {item.type === 'todo' && (
         <div className="todo-line">
-          <span className="todo-check" aria-hidden="true">
+          <span className="todo-check fake-check" aria-hidden="true">
             {asText(detail.completedAt) ? '✓' : ''}
           </span>
           <span>{asText(detail.title)}</span>
@@ -364,22 +353,17 @@ function Timeline({ items }: { items: InboxItem[] }) {
   )
 }
 
-function Header({
-  itemCount,
-  onSearch,
+function InboxHeader({
+  alerts,
 }: {
-  itemCount: number
-  onSearch: () => void
+  alerts: AlertItem[]
 }) {
   return (
     <header className="chat-header">
       <div>
         <h1>MeBox</h1>
-        <p>{itemCount}개 항목</p>
+        <p>{alerts.length ? `${alerts.length}개 알림` : '개인 인박스'}</p>
       </div>
-      <button aria-label="검색 열기" className="icon-button" onClick={onSearch} type="button">
-        ⌕
-      </button>
     </header>
   )
 }
@@ -610,19 +594,13 @@ function InboxScreen({
   alerts,
   items,
   onCreated,
-  onSearch,
 }: {
   alerts: AlertItem[]
   items: InboxItem[]
   onCreated: (item: InboxItem) => void
-  onSearch: () => void
 }) {
-  const [activeCategory, setActiveCategory] = useState<CategoryLabel>('All')
   const timelineRef = useRef<HTMLDivElement | null>(null)
-  const visibleItems = useMemo(
-    () => sortItemsOldestFirst(filterItemsByCategory(items, activeCategory)),
-    [activeCategory, items],
-  )
+  const visibleItems = useMemo(() => sortItemsOldestFirst(items), [items])
 
   useEffect(() => {
     const timeline = timelineRef.current
@@ -634,20 +612,8 @@ function InboxScreen({
   return (
     <>
       <main className="screen inbox-screen">
-        <Header itemCount={items.length} onSearch={onSearch} />
+        <InboxHeader alerts={alerts} />
         <AlertStrip alerts={alerts} />
-        <div className="category-filter-row" aria-label="Inbox category filter">
-          {categoryLabels.map((category) => (
-            <button
-              className={category === activeCategory ? 'selected' : ''}
-              key={category}
-              onClick={() => setActiveCategory(category)}
-              type="button"
-            >
-              {category}
-            </button>
-          ))}
-        </div>
         <div className="timeline-scroll" ref={timelineRef}>
           <Timeline items={visibleItems} />
         </div>
@@ -657,38 +623,39 @@ function InboxScreen({
   )
 }
 
-function SearchScreen() {
+function SearchScreen({ allItems }: { allItems: InboxItem[] }) {
   const [query, setQuery] = useState('')
-  const [type, setType] = useState<ItemType | 'all'>('all')
-  const [items, setItems] = useState<InboxItem[]>([])
-  const [error, setError] = useState('')
+  const [activeCategory, setActiveCategory] = useState<CategoryLabel>('All')
 
-  async function runSearch(event: FormEvent) {
-    event.preventDefault()
+  const filteredItems = useMemo(() => {
+    const byCategory = filterItemsByCategory(allItems, activeCategory)
     if (!query.trim()) {
-      setItems([])
-      return
+      return sortItemsOldestFirst(byCategory)
     }
 
-    const params = new URLSearchParams({ q: query })
-    if (type !== 'all') {
-      params.set('type', type)
-    }
-
-    try {
-      const response = await apiFetch<{ items: InboxItem[] }>(
-        `/api/search?${params.toString()}`,
-      )
-      setItems(response.items)
-      setError('')
-    } catch {
-      setError('검색하지 못했습니다.')
-    }
-  }
+    const q = query.trim().toLowerCase()
+    return sortItemsOldestFirst(
+      byCategory.filter((item) => {
+        const detail = item.detail ?? {}
+        return [
+          item.body ?? '',
+          asText(detail.text),
+          asText(detail.title),
+          asText(detail.url),
+          asText(detail.memo),
+          asText(detail.body),
+          asText(detail.name),
+        ]
+          .join(' ')
+          .toLowerCase()
+          .includes(q)
+      }),
+    )
+  }, [allItems, activeCategory, query])
 
   return (
     <main className="screen plain-screen">
-      <form className="search-box" onSubmit={runSearch}>
+      <div className="search-box">
         <input
           aria-label="검색어"
           autoFocus
@@ -696,27 +663,27 @@ function SearchScreen() {
           placeholder="검색"
           value={query}
         />
-      </form>
+      </div>
 
-      <div className="filter-row" aria-label="타입 필터">
-        {searchTypes.map((entry) => (
+      <div className="filter-row no-scrollbar" aria-label="카테고리 필터">
+        {categoryLabels.map((category) => (
           <button
-            className={entry.type === type ? 'selected' : ''}
-            key={entry.type}
-            onClick={() => setType(entry.type)}
+            className={category === activeCategory ? 'selected' : ''}
+            key={category}
+            onClick={() => setActiveCategory(category)}
             type="button"
           >
-            {entry.label}
+            {category}
           </button>
         ))}
       </div>
 
-      {error && <p className="form-error">{error}</p>}
-
       <section className="search-results" aria-label="검색 결과">
-        {items.map((item) => (
-          <MessageBubble item={item} key={item.id} />
-        ))}
+        {filteredItems.length ? (
+          filteredItems.map((item) => <MessageBubble item={item} key={item.id} />)
+        ) : (
+          <div className="empty-thread">검색 결과가 없습니다.</div>
+        )}
       </section>
     </main>
   )
@@ -1438,7 +1405,7 @@ function App() {
         {loadError && <div className="offline-banner">{loadError}</div>}
 
         {activeNav === 'search' ? (
-          <SearchScreen />
+          <SearchScreen allItems={items} />
         ) : activeNav === 'settings' ? (
           <SettingsScreen
             onDeleted={handleDeleted}
@@ -1459,7 +1426,6 @@ function App() {
               setItems((current) => [...current, item])
               void refreshInbox()
             }}
-            onSearch={() => setActiveNav('search')}
           />
         )}
 
