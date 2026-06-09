@@ -401,7 +401,11 @@ function Composer({
   const [error, setError] = useState('')
 
   const isNote = createType === 'note'
-  const placeholder = isNote ? '나에게 입력...' : `${typeLabel(createType)} 입력...`
+  const placeholder = isNote
+    ? '나에게 입력...'
+    : createType === 'list'
+      ? '리스트 제목 입력...'
+      : `${typeLabel(createType)} 입력...`
   const canSend = createType === 'file' ? selectedFile !== null : draft.trim().length > 0
 
   function resetComposer() {

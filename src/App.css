@@ -306,6 +306,26 @@ button:disabled {
   --category-badge-text: #d6ffe2;
 }
 
+.message-bubble.message-note,
+.message-bubble.message-todo {
+  background: var(--bubble-own);
+  color: var(--bubble-own-text);
+}
+
+.message-bubble.message-link,
+.message-bubble.message-list,
+.message-bubble.message-file,
+.message-bubble.message-announcement,
+.message-bubble.message-recurring_expense {
+  background: var(--bubble);
+  color: var(--text);
+  border: 1px solid rgba(255, 255, 255, 0.04);
+}
+
+.message-bubble.message-announcement {
+  border-color: rgba(246, 199, 110, 0.2);
+}
+
 .message-label {
   display: flex;
   align-items: center;
@@ -658,6 +678,11 @@ button:disabled {
 
 .filter-row::-webkit-scrollbar {
   display: none;
+}
+
+.filter-row button {
+  white-space: nowrap;
+  flex-shrink: 0;
 }
 
 .section-header {
