@@ -62,6 +62,7 @@
 .plain-screen {
   min-height: 0;
   overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
   padding-top: 16px;
   padding-bottom: 16px;
 }
@@ -703,6 +704,8 @@ button:disabled {
   display: flex;
   gap: 8px;
   overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+  scroll-snap-type: none;
   margin: 0 -14px;
   padding: 0 14px 12px;
   scrollbar-width: none;
