@@ -703,13 +703,19 @@ button:disabled {
   display: flex;
   gap: 8px;
   overflow-x: auto;
-  padding-bottom: 12px;
+  margin: 0 -14px;
+  padding: 0 14px 12px;
   scrollbar-width: none;
   -ms-overflow-style: none;
 }
 
 .filter-row::-webkit-scrollbar {
   display: none;
+}
+
+.filter-row::after {
+  content: '';
+  flex: 0 0 14px;
 }
 
 .section-header {
