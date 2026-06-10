@@ -306,24 +306,44 @@ button:disabled {
   --category-badge-text: #d6ffe2;
 }
 
-.message-bubble.message-note,
-.message-bubble.message-todo {
-  background: var(--bubble-own);
-  color: var(--bubble-own-text);
+.message-bubble.message-note {
+  background: #1f5faa;
+  color: #ffffff;
 }
 
-.message-bubble.message-link,
-.message-bubble.message-list,
-.message-bubble.message-file,
-.message-bubble.message-announcement,
-.message-bubble.message-recurring_expense {
-  background: var(--bubble);
+.message-bubble.message-todo {
+  background: #7a4e1a;
+  color: #ffffff;
+}
+
+.message-bubble.message-link {
+  background: #0f3d3d;
   color: var(--text);
-  border: 1px solid rgba(255, 255, 255, 0.04);
+  border: 1px solid rgba(93, 201, 222, 0.2);
+}
+
+.message-bubble.message-list {
+  background: #1a1f3d;
+  color: var(--text);
+  border: 1px solid rgba(168, 184, 244, 0.2);
+}
+
+.message-bubble.message-file {
+  background: #0f2233;
+  color: var(--text);
+  border: 1px solid rgba(127, 190, 226, 0.2);
 }
 
 .message-bubble.message-announcement {
-  border-color: rgba(246, 199, 110, 0.2);
+  background: #2a1a2e;
+  color: var(--text);
+  border: 1px solid rgba(223, 145, 215, 0.25);
+}
+
+.message-bubble.message-recurring_expense {
+  background: #0f2d1a;
+  color: var(--text);
+  border: 1px solid rgba(124, 210, 151, 0.2);
 }
 
 .message-label {
@@ -561,7 +581,6 @@ button:disabled {
 }
 
 .create-sheet button,
-.filter-row button,
 .category-filter-row button {
   border: 1px solid var(--line);
   border-radius: 999px;
@@ -571,6 +590,19 @@ button:disabled {
   font-weight: 500;
   min-height: 35px;
   padding: 0 10px;
+}
+
+.filter-row button {
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: var(--panel-raised);
+  color: var(--text-soft);
+  font-size: 13px;
+  font-weight: 500;
+  min-height: 35px;
+  padding: 0 10px;
+  white-space: nowrap;
+  flex-shrink: 0;
 }
 
 .create-sheet button.selected,
@@ -678,11 +710,6 @@ button:disabled {
 
 .filter-row::-webkit-scrollbar {
   display: none;
-}
-
-.filter-row button {
-  white-space: nowrap;
-  flex-shrink: 0;
 }
 
 .section-header {
