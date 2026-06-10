@@ -245,7 +245,13 @@ function AuthScreen({
   )
 }
 
-function MessageBubble({ item }: { item: InboxItem }) {
+function MessageBubble({
+  item,
+  onToggleComplete,
+}: {
+  item: InboxItem
+  onToggleComplete?: (id: number) => void
+}) {
   const detail = item.detail ?? {}
 
   return (
@@ -274,10 +280,31 @@ function MessageBubble({ item }: { item: InboxItem }) {
 
       {item.type === 'todo' && (
         <div className="todo-line">
-          <span className="todo-check fake-check" aria-hidden="true">
-            {asText(detail.completedAt) ? '✓' : ''}
-          </span>
-          <span>{asText(detail.title)}</span>
+          {onToggleComplete ? (
+            <button
+              aria-label={asText(detail.completedAt) ? '완료 취소' : '완료'}
+              aria-pressed={Boolean(asText(detail.completedAt))}
+              className="todo-check"
+              onClick={() => onToggleComplete(item.id)}
+              type="button"
+            >
+              {asText(detail.completedAt) ? '✓' : ''}
+            </button>
+          ) : (
+            <span className="todo-check" aria-hidden="true">
+              {asText(detail.completedAt) ? '✓' : ''}
+            </span>
+          )}
+          <div className="todo-content">
+            <span className={asText(detail.completedAt) ? 'todo-done' : ''}>
+              {asText(detail.title)}
+            </span>
+            {asText(detail.dueAt) && (
+              <span className="reminder-due">
+                {formatDateTitle(asText(detail.dueAt))} {formatMessageTime(asText(detail.dueAt))}
+              </span>
+            )}
+          </div>
         </div>
       )}
 
@@ -334,7 +361,13 @@ function MessageBubble({ item }: { item: InboxItem }) {
   )
 }
 
-function Timeline({ items }: { items: InboxItem[] }) {
+function Timeline({
+  items,
+  onToggleComplete,
+}: {
+  items: InboxItem[]
+  onToggleComplete?: (id: number) => void
+}) {
   if (!items.length) {
     return <div className="empty-thread">아직 아무 것도 없습니다. 첫 메모를 보내세요.</div>
   }
@@ -345,7 +378,7 @@ function Timeline({ items }: { items: InboxItem[] }) {
         <div className="day-group" key={group.title}>
           <div className="day-divider">{group.title}</div>
           {group.items.map((item) => (
-            <MessageBubble item={item} key={item.id} />
+            <MessageBubble item={item} key={item.id} onToggleComplete={onToggleComplete} />
           ))}
         </div>
       ))}
@@ -914,10 +947,12 @@ function InboxScreen({
   alerts,
   items,
   onCreated,
+  onToggleComplete,
 }: {
   alerts: AlertItem[]
   items: InboxItem[]
   onCreated: (item: InboxItem) => void
+  onToggleComplete: (id: number) => void
 }) {
   const timelineRef = useRef<HTMLDivElement | null>(null)
   const visibleItems = useMemo(() => sortItemsOldestFirst(items), [items])
@@ -935,7 +970,7 @@ function InboxScreen({
         <InboxHeader alerts={alerts} />
         <AlertStrip alerts={alerts} />
         <div className="timeline-scroll" ref={timelineRef}>
-          <Timeline items={visibleItems} />
+          <Timeline items={visibleItems} onToggleComplete={onToggleComplete} />
         </div>
       </main>
       <Composer onCreated={onCreated} />
@@ -1686,6 +1721,15 @@ function App() {
     await refreshInbox()
   }
 
+  async function toggleComplete(id: number) {
+    try {
+      await apiFetch(`/api/items/todos/${id}/complete`, { method: 'PATCH' })
+      await refreshInbox()
+    } catch {
+      setLoadError('완료 상태를 변경하지 못했습니다.')
+    }
+  }
+
   useEffect(() => {
     void Promise.resolve().then(refreshAuth)
   }, [])
@@ -1745,6 +1789,9 @@ function App() {
             onCreated={(item) => {
               setItems((current) => [...current, item])
               void refreshInbox()
+            }}
+            onToggleComplete={(id) => {
+              void toggleComplete(id)
             }}
           />
         )}

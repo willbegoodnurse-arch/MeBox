@@ -411,6 +411,28 @@ export function createApp({ db, uploadDir = 'uploads' }: AppOptions) {
     return { item: getItem(db, id) }
   })
 
+  app.patch('/api/items/todos/:id/complete', async (request, reply) => {
+    const id = Number((request.params as { id: string }).id)
+    if (!Number.isInteger(id) || id <= 0) {
+      reply.code(404)
+      return { error: 'Todo not found' }
+    }
+
+    const existing = db
+      .prepare('SELECT completed_at AS completedAt FROM todos WHERE item_id = ?')
+      .get(id) as { completedAt: string | null } | undefined
+
+    if (!existing) {
+      reply.code(404)
+      return { error: 'Todo not found' }
+    }
+
+    const completedAt = existing.completedAt ? null : new Date().toISOString()
+    db.prepare('UPDATE todos SET completed_at = ? WHERE item_id = ?').run(completedAt, id)
+
+    return { item: getItem(db, id) }
+  })
+
   app.post('/api/items/lists', async (request, reply) => {
     const input = parseBody(listInputSchema, request.body)
     const id = db.transaction(() => {

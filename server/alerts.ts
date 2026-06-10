@@ -70,7 +70,6 @@ function daysBetween(start: Date, end: Date) {
 }
 
 export function listAlerts(db: Database.Database, now = new Date()): AlertItem[] {
-  const today = toDateOnly(now)
   const todos = db
     .prepare(
       `
@@ -78,11 +77,11 @@ export function listAlerts(db: Database.Database, now = new Date()): AlertItem[]
       FROM todos
       WHERE completed_at IS NULL
         AND due_at IS NOT NULL
-        AND date(due_at) <= date(?)
+        AND due_at <= ?
       ORDER BY due_at ASC
     `,
     )
-    .all(today) as TodoAlertRow[]
+    .all(now.toISOString()) as TodoAlertRow[]
 
   const todoAlerts = todos.map((todo) => ({
     id: todo.item_id,
