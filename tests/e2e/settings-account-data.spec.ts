@@ -208,9 +208,16 @@ test('inbox category filters preserve oldest-to-newest order and render links as
 }) => {
   await createAccount(page)
   const items = await createInboxFixture(page, 'category-filter')
-  const categoryRow = page.locator('.category-filter-row')
 
-  await expect(categoryRow.getByRole('button')).toHaveText([
+  // Inbox is a view-only timeline: no category filter row and no search icon.
+  await expect(page.locator('.category-filter-row')).toHaveCount(0)
+  await expect(page.locator('.chat-header .icon-button')).toHaveCount(0)
+
+  // Search owns category filtering. Switch to the Search tab.
+  await page.locator('.bottom-nav button').nth(1).click()
+
+  const filterRow = page.locator('.filter-row')
+  await expect(filterRow.locator('button')).toHaveText([
     'All',
     'Chat',
     'Link',
@@ -220,42 +227,28 @@ test('inbox category filters preserve oldest-to-newest order and render links as
     'Notification',
     'Fixed',
   ])
-  await expect(page.getByText('개인 인박스')).toHaveCount(0)
 
-  await expect(page.locator('.message-card')).toHaveCount(3)
-  await expect(page.locator('.message-card').nth(0)).toContainText(items.note)
-  await expect(page.locator('.message-card').nth(1)).toContainText(items.linkTitle)
-  await expect(page.locator('.message-card').nth(2)).toContainText(items.todo)
-  await expect(
-    await page.locator('.timeline-scroll').evaluate((node) => {
-      const distanceFromBottom = node.scrollHeight - node.clientHeight - node.scrollTop
-      return Math.abs(distanceFromBottom) <= 1
-    }),
-  ).toBe(true)
-  await expect(
-    await page.locator('.message-card').first().evaluate((card) => {
-      const categoryBottom = document
-        .querySelector('.category-filter-row')
-        ?.getBoundingClientRect().bottom
-      return categoryBottom === undefined || card.getBoundingClientRect().top >= categoryBottom
-    }),
-  ).toBe(true)
+  // Default category is All: all three items visible, oldest-to-newest.
+  await expect(page.locator('.message-bubble')).toHaveCount(3)
+  await expect(page.locator('.message-bubble').nth(0)).toContainText(items.note)
+  await expect(page.locator('.message-bubble').nth(1)).toContainText(items.linkTitle)
+  await expect(page.locator('.message-bubble').nth(2)).toContainText(items.todo)
 
   const link = page.locator('.message-link a.message-url')
   await expect(link).toHaveAttribute('href', 'https://example.test/category-filter')
   await expect(link).toHaveAttribute('target', '_blank')
   await expect(link).toHaveAttribute('rel', 'noreferrer noopener')
 
-  await categoryRow.getByRole('button', { name: 'Link' }).click()
+  await filterRow.getByRole('button', { name: 'Link', exact: true }).click()
   await expect(page.getByText(items.linkTitle)).toBeVisible()
   await expect(page.getByText(items.note)).toBeHidden()
   await expect(page.getByText(items.todo)).toBeHidden()
 
-  await categoryRow.getByRole('button', { name: 'Reminders' }).click()
+  await filterRow.getByRole('button', { name: 'Reminders', exact: true }).click()
   await expect(page.getByText(items.todo)).toBeVisible()
   await expect(page.getByText(items.linkTitle)).toBeHidden()
 
-  await categoryRow.getByRole('button', { name: 'All' }).click()
+  await filterRow.getByRole('button', { name: 'All', exact: true }).click()
   await expect(page.getByText(items.note)).toBeVisible()
   await expect(page.getByText(items.linkTitle)).toBeVisible()
   await expect(page.getByText(items.todo)).toBeVisible()
@@ -288,10 +281,10 @@ test('only reminder cards render checkbox markers', async ({ page }) => {
   await createTodo(page, 'Reminder checkbox')
   await createAnnouncement(page, 'No checkbox notification', 'Notification body')
 
-  await expect(page.locator('.message-note .todo-check')).toHaveCount(0)
-  await expect(page.locator('.message-link .todo-check')).toHaveCount(0)
-  await expect(page.locator('.message-announcement .todo-check')).toHaveCount(0)
-  await expect(page.locator('.message-todo .todo-check')).toHaveCount(1)
+  await expect(page.locator('.message-bubble.message-note .todo-check')).toHaveCount(0)
+  await expect(page.locator('.message-bubble.message-link .todo-check')).toHaveCount(0)
+  await expect(page.locator('.message-bubble.message-announcement .todo-check')).toHaveCount(0)
+  await expect(page.locator('.message-bubble.message-todo .todo-check')).toHaveCount(1)
 })
 
 test('plain JSON export/import round trip restores visible inbox items after reload', async ({
