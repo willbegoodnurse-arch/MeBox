@@ -385,6 +385,296 @@ function AlertStrip({ alerts }: { alerts: AlertItem[] }) {
   )
 }
 
+const repeatOptions = ['Never', 'Daily', 'Weekly', 'Monthly'] as const
+type RepeatOption = (typeof repeatOptions)[number]
+
+const advanceNoticeOptions: { label: string; value: number | null }[] = [
+  { label: '5 min', value: 5 },
+  { label: '15 min', value: 15 },
+  { label: '30 min', value: 30 },
+  { label: '1 hour', value: 60 },
+  { label: '2 hours', value: 120 },
+  { label: '1 day', value: 1440 },
+  { label: 'None', value: null },
+]
+
+const weekdayLabels = ['Su', 'Mo', 'Tu', 'We', 'Th', 'Fr', 'Sa']
+
+function startOfMonth(date: Date) {
+  return new Date(date.getFullYear(), date.getMonth(), 1)
+}
+
+function sameYmd(left: Date, right: Date) {
+  return (
+    left.getFullYear() === right.getFullYear() &&
+    left.getMonth() === right.getMonth() &&
+    left.getDate() === right.getDate()
+  )
+}
+
+function buildCalendarDays(viewMonth: Date) {
+  const first = startOfMonth(viewMonth)
+  const gridStart = new Date(first)
+  gridStart.setDate(first.getDate() - first.getDay())
+
+  return Array.from({ length: 42 }, (_, index) => {
+    const day = new Date(gridStart)
+    day.setDate(gridStart.getDate() + index)
+    return day
+  })
+}
+
+function pad2(value: number) {
+  return value.toString().padStart(2, '0')
+}
+
+function ReminderSheet({
+  initialTitle,
+  onCancel,
+  onSaved,
+}: {
+  initialTitle: string
+  onCancel: () => void
+  onSaved: (item: InboxItem) => void
+}) {
+  const now = new Date()
+  const [visible, setVisible] = useState(false)
+  const [title, setTitle] = useState(initialTitle)
+  const [viewMonth, setViewMonth] = useState(() => startOfMonth(now))
+  const [selectedDate, setSelectedDate] = useState(
+    () => new Date(now.getFullYear(), now.getMonth(), now.getDate()),
+  )
+  const [hour, setHour] = useState(pad2(now.getHours()))
+  const [minute, setMinute] = useState(pad2(now.getMinutes()))
+  const [allDay, setAllDay] = useState(false)
+  const [repeat, setRepeat] = useState<RepeatOption>('Never')
+  const [advanceMinutes, setAdvanceMinutes] = useState<number | null>(15)
+  const [error, setError] = useState('')
+  const [saving, setSaving] = useState(false)
+
+  useEffect(() => {
+    const frame = window.requestAnimationFrame(() => setVisible(true))
+    return () => window.cancelAnimationFrame(frame)
+  }, [])
+
+  const calendarDays = useMemo(() => buildCalendarDays(viewMonth), [viewMonth])
+  const monthLabel = new Intl.DateTimeFormat(undefined, {
+    month: 'long',
+    year: 'numeric',
+  }).format(viewMonth)
+  const canSave = title.trim().length > 0 && !saving
+
+  function close(after: () => void) {
+    setVisible(false)
+    window.setTimeout(after, 280)
+  }
+
+  function shiftMonth(delta: number) {
+    setViewMonth((current) => new Date(current.getFullYear(), current.getMonth() + delta, 1))
+  }
+
+  async function save() {
+    if (!title.trim()) {
+      setError('제목을 입력하세요.')
+      return
+    }
+
+    setSaving(true)
+    setError('')
+
+    const hours = allDay ? 0 : Number(hour) || 0
+    const minutes = allDay ? 0 : Number(minute) || 0
+    const due = new Date(
+      selectedDate.getFullYear(),
+      selectedDate.getMonth(),
+      selectedDate.getDate(),
+      hours,
+      minutes,
+      0,
+      0,
+    )
+
+    try {
+      const response = await apiFetch<{ item: InboxItem }>('/api/items/todos', {
+        method: 'POST',
+        body: JSON.stringify({
+          title: title.trim(),
+          dueAt: due.toISOString(),
+          repeat,
+          advanceMinutes,
+        }),
+      })
+      close(() => onSaved(response.item))
+    } catch {
+      setError('저장하지 못했습니다.')
+      setSaving(false)
+    }
+  }
+
+  return (
+    <div
+      className="reminder-sheet-overlay"
+      role="dialog"
+      aria-modal="true"
+      aria-label="New Reminder"
+    >
+      <div className={`reminder-sheet ${visible ? 'open' : ''}`}>
+        <header className="reminder-sheet-header">
+          <button className="sheet-cancel-btn" onClick={() => close(onCancel)} type="button">
+            Cancel
+          </button>
+          <h2>New Reminder</h2>
+          <button className="sheet-save-btn" disabled={!canSave} onClick={save} type="button">
+            Save
+          </button>
+        </header>
+
+        <div className="reminder-sheet-body">
+          <section className="reminder-section">
+            <span className="reminder-section-label">Title</span>
+            <input
+              aria-label="제목"
+              className="reminder-input"
+              onChange={(event) => setTitle(event.target.value)}
+              placeholder="제목 입력"
+              value={title}
+            />
+          </section>
+
+          <section className="reminder-section">
+            <span className="reminder-section-label">Date &amp; Time</span>
+            <div className="cal-header">
+              <button
+                aria-label="이전 달"
+                className="cal-nav"
+                onClick={() => shiftMonth(-1)}
+                type="button"
+              >
+                ‹
+              </button>
+              <strong>{monthLabel}</strong>
+              <button
+                aria-label="다음 달"
+                className="cal-nav"
+                onClick={() => shiftMonth(1)}
+                type="button"
+              >
+                ›
+              </button>
+            </div>
+            <div className="calendar-grid">
+              {weekdayLabels.map((label) => (
+                <div className="cal-weekday" key={label}>
+                  {label}
+                </div>
+              ))}
+              {calendarDays.map((day) => {
+                const classes = ['cal-day']
+                if (day.getMonth() !== viewMonth.getMonth()) {
+                  classes.push('other-month')
+                }
+                if (sameYmd(day, now)) {
+                  classes.push('today')
+                }
+                if (sameYmd(day, selectedDate)) {
+                  classes.push('selected')
+                }
+
+                return (
+                  <button
+                    className={classes.join(' ')}
+                    key={day.toISOString()}
+                    onClick={() =>
+                      setSelectedDate(
+                        new Date(day.getFullYear(), day.getMonth(), day.getDate()),
+                      )
+                    }
+                    type="button"
+                  >
+                    {day.getDate()}
+                  </button>
+                )
+              })}
+            </div>
+          </section>
+
+          <section className="reminder-section">
+            <span className="reminder-section-label">Time</span>
+            <div className="time-row">
+              <button
+                className={`allday-toggle ${allDay ? 'active' : ''}`}
+                onClick={() => setAllDay((value) => !value)}
+                type="button"
+              >
+                All Day
+              </button>
+              {!allDay && (
+                <div className="time-inputs">
+                  <input
+                    aria-label="시"
+                    className="reminder-input time-field"
+                    inputMode="numeric"
+                    max="23"
+                    min="0"
+                    onChange={(event) => setHour(event.target.value)}
+                    type="number"
+                    value={hour}
+                  />
+                  <span>:</span>
+                  <input
+                    aria-label="분"
+                    className="reminder-input time-field"
+                    inputMode="numeric"
+                    max="59"
+                    min="0"
+                    onChange={(event) => setMinute(event.target.value)}
+                    type="number"
+                    value={minute}
+                  />
+                </div>
+              )}
+            </div>
+          </section>
+
+          <section className="reminder-section">
+            <span className="reminder-section-label">Repeat</span>
+            <div className="option-row">
+              {repeatOptions.map((option) => (
+                <button
+                  className={`option-chip ${repeat === option ? 'selected' : ''}`}
+                  key={option}
+                  onClick={() => setRepeat(option)}
+                  type="button"
+                >
+                  {option}
+                </button>
+              ))}
+            </div>
+          </section>
+
+          <section className="reminder-section">
+            <span className="reminder-section-label">Advance Notice</span>
+            <div className="option-row">
+              {advanceNoticeOptions.map((option) => (
+                <button
+                  className={`option-chip ${advanceMinutes === option.value ? 'selected' : ''}`}
+                  key={option.label}
+                  onClick={() => setAdvanceMinutes(option.value)}
+                  type="button"
+                >
+                  {option.label}
+                </button>
+              ))}
+            </div>
+          </section>
+
+          {error && <p className="sheet-error">{error}</p>}
+        </div>
+      </div>
+    </div>
+  )
+}
+
 function Composer({
   onCreated,
 }: {
@@ -398,14 +688,18 @@ function Composer({
   const [billingDay, setBillingDay] = useState('1')
   const [selectedFile, setSelectedFile] = useState<File | null>(null)
   const [isSending, setIsSending] = useState(false)
+  const [reminderSheetOpen, setReminderSheetOpen] = useState(false)
   const [error, setError] = useState('')
 
   const isNote = createType === 'note'
+  const isReminder = createType === 'todo'
   const placeholder = isNote
     ? '나에게 입력...'
     : createType === 'list'
       ? '리스트 제목 입력...'
-      : `${typeLabel(createType)} 입력...`
+      : isReminder
+        ? 'Reminder 제목 입력...'
+        : `${typeLabel(createType)} 입력...`
   const canSend = createType === 'file' ? selectedFile !== null : draft.trim().length > 0
 
   function resetComposer() {
@@ -419,6 +713,12 @@ function Composer({
 
   async function submit(event: FormEvent) {
     event.preventDefault()
+
+    if (isReminder) {
+      setReminderSheetOpen(true)
+      return
+    }
+
     setIsSending(true)
     setError('')
 
@@ -446,9 +746,6 @@ function Composer({
 
         path = '/api/items/links'
         payload = { url: normalizedUrl, title: extra || undefined }
-      } else if (createType === 'todo') {
-        path = '/api/items/todos'
-        payload = { title: draft, dueAt: extra ? new Date(extra).toISOString() : undefined }
       } else if (createType === 'list') {
         path = '/api/items/lists'
         payload = {
@@ -487,6 +784,7 @@ function Composer({
   }
 
   return (
+    <>
     <form className="composer" onSubmit={submit}>
       {menuOpen && (
         <div className="create-sheet" aria-label="생성 메뉴">
@@ -507,7 +805,7 @@ function Composer({
         </div>
       )}
 
-      {!isNote && (
+      {!isNote && !isReminder && (
         <div className="detail-tray">
           <span>{typeLabel(createType)}</span>
           {createType === 'file' ? (
@@ -516,13 +814,6 @@ function Composer({
               aria-label="파일 선택"
               onChange={(event) => setSelectedFile(event.target.files?.[0] ?? null)}
               type="file"
-            />
-          ) : createType === 'todo' ? (
-            <input
-              aria-label="마감일"
-              onChange={(event) => setExtra(event.target.value)}
-              type="datetime-local"
-              value={extra}
             />
           ) : createType === 'list' ? (
             <textarea
@@ -586,11 +877,36 @@ function Composer({
           placeholder={createType === 'file' ? selectedFile?.name ?? '파일 선택' : placeholder}
           value={createType === 'file' ? selectedFile?.name ?? '' : draft}
         />
-        <button className="send-button" disabled={isSending || !canSend} type="submit">
-          보내기
-        </button>
+        {isReminder ? (
+          <button
+            className="send-button"
+            onClick={() => setReminderSheetOpen(true)}
+            type="button"
+          >
+            Add Reminder
+          </button>
+        ) : (
+          <button className="send-button" disabled={isSending || !canSend} type="submit">
+            보내기
+          </button>
+        )}
       </div>
     </form>
+      {reminderSheetOpen && isReminder && (
+        <ReminderSheet
+          initialTitle={draft}
+          onCancel={() => {
+            setReminderSheetOpen(false)
+            resetComposer()
+          }}
+          onSaved={(item) => {
+            setReminderSheetOpen(false)
+            onCreated(item)
+            resetComposer()
+          }}
+        />
+      )}
+    </>
   )
 }
 
