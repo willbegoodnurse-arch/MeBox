@@ -99,8 +99,12 @@ async function createTodo(page: Page, title: string) {
   await page.locator('.plus-button').click()
   await page.locator('.create-sheet button').nth(2).click()
   await page.locator('.composer-row input').fill(title)
-  await page.locator('.send-button').click()
-  await expect(page.getByText(title)).toBeVisible()
+  await page.getByRole('button', { name: 'Add Reminder' }).click()
+  const sheet = page.locator('.reminder-sheet')
+  await expect(sheet).toBeVisible()
+  await sheet.getByRole('button', { name: 'Save' }).click()
+  await expect(sheet).toBeHidden()
+  await expect(page.getByText(title).first()).toBeVisible()
 }
 
 async function createAnnouncement(page: Page, title: string, body: string) {

@@ -111,6 +111,46 @@ test('creates and lists note items', async () => {
   await closeTestApp(app, db)
 })
 
+test('toggles todo completion via the complete endpoint', async () => {
+  const db = testDb()
+  const app = createApp({ db })
+  const cookie = await authCookie(app)
+
+  const createResponse = await app.inject({
+    method: 'POST',
+    url: '/api/items/todos',
+    headers: { cookie },
+    payload: { title: 'finish report', dueAt: '2026-06-10T00:00:00.000Z' },
+  })
+  assert.equal(createResponse.statusCode, 201)
+  const todoId = createResponse.json().item.id
+
+  const completeResponse = await app.inject({
+    method: 'PATCH',
+    url: `/api/items/todos/${todoId}/complete`,
+    headers: { cookie },
+  })
+  assert.equal(completeResponse.statusCode, 200)
+  assert.notEqual(completeResponse.json().item.detail.completedAt, null)
+
+  const undoResponse = await app.inject({
+    method: 'PATCH',
+    url: `/api/items/todos/${todoId}/complete`,
+    headers: { cookie },
+  })
+  assert.equal(undoResponse.statusCode, 200)
+  assert.equal(undoResponse.json().item.detail.completedAt, null)
+
+  const missingResponse = await app.inject({
+    method: 'PATCH',
+    url: '/api/items/todos/9999/complete',
+    headers: { cookie },
+  })
+  assert.equal(missingResponse.statusCode, 404)
+
+  await closeTestApp(app, db)
+})
+
 test('lists inbox items oldest to newest', async () => {
   const db = testDb()
   const app = createApp({ db })
