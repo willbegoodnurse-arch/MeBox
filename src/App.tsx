@@ -717,6 +717,101 @@ function ReminderSheet({
   )
 }
 
+function ListSheet({
+  initialTitle,
+  onCancel,
+  onSaved,
+}: {
+  initialTitle: string
+  onCancel: () => void
+  onSaved: (item: InboxItem) => void
+}) {
+  const [visible, setVisible] = useState(false)
+  const [title, setTitle] = useState(initialTitle)
+  const [itemsText, setItemsText] = useState('')
+  const [error, setError] = useState('')
+  const [saving, setSaving] = useState(false)
+
+  useEffect(() => {
+    const frame = window.requestAnimationFrame(() => setVisible(true))
+    return () => window.cancelAnimationFrame(frame)
+  }, [])
+
+  const canSave = title.trim().length > 0 && !saving
+
+  function close(after: () => void) {
+    setVisible(false)
+    window.setTimeout(after, 280)
+  }
+
+  async function save() {
+    if (!title.trim()) return
+    setSaving(true)
+    setError('')
+
+    const items = itemsText
+      .split('\n')
+      .map((text) => text.trim())
+      .filter(Boolean)
+      .map((text) => ({ text }))
+
+    try {
+      const response = await apiFetch<{ item: InboxItem }>('/api/items/lists', {
+        method: 'POST',
+        body: JSON.stringify({ title: title.trim(), items: items.length ? items : [{ text: title.trim() }] }),
+      })
+      close(() => onSaved(response.item))
+    } catch {
+      setError('저장하지 못했습니다.')
+      setSaving(false)
+    }
+  }
+
+  return (
+    <div className="list-sheet-overlay" role="dialog" aria-modal="true" aria-label="New List">
+      <div className={`list-sheet ${visible ? 'open' : ''}`}>
+        <header className="reminder-sheet-header">
+          <button className="sheet-cancel-btn" onClick={() => close(onCancel)} type="button">
+            Cancel
+          </button>
+          <h2>New List</h2>
+          <button className="sheet-save-btn" disabled={!canSave} onClick={save} type="button">
+            Save
+          </button>
+        </header>
+
+        <div className="reminder-sheet-body">
+          <section className="reminder-section">
+            <span className="reminder-section-label">Title</span>
+            <input
+              autoFocus
+              aria-label="리스트 이름"
+              className="reminder-input"
+              onChange={(event) => setTitle(event.target.value)}
+              placeholder="리스트 이름"
+              value={title}
+            />
+          </section>
+
+          <section className="reminder-section">
+            <span className="reminder-section-label">Items</span>
+            <textarea
+              aria-label="리스트 항목"
+              className="reminder-input"
+              onChange={(event) => setItemsText(event.target.value)}
+              placeholder="항목을 줄마다 입력"
+              rows={5}
+              value={itemsText}
+            />
+          </section>
+
+          {error && <p className="sheet-error">{error}</p>}
+        </div>
+      </div>
+    </div>
+  )
+}
+
 function Composer({
   onCreated,
 }: {
@@ -731,10 +826,12 @@ function Composer({
   const [selectedFile, setSelectedFile] = useState<File | null>(null)
   const [isSending, setIsSending] = useState(false)
   const [reminderSheetOpen, setReminderSheetOpen] = useState(false)
+  const [listSheetOpen, setListSheetOpen] = useState(false)
   const [error, setError] = useState('')
 
   const isNote = createType === 'note'
   const isReminder = createType === 'todo'
+  const isList = createType === 'list'
   const placeholder = isNote
     ? '나에게 입력...'
     : createType === 'list'
@@ -758,6 +855,11 @@ function Composer({
 
     if (isReminder) {
       setReminderSheetOpen(true)
+      return
+    }
+
+    if (isList) {
+      setListSheetOpen(true)
       return
     }
 
@@ -788,16 +890,6 @@ function Composer({
 
         path = '/api/items/links'
         payload = { url: normalizedUrl, title: extra || undefined }
-      } else if (createType === 'list') {
-        path = '/api/items/lists'
-        payload = {
-          title: draft,
-          items: extra
-            .split('\n')
-            .map((text) => text.trim())
-            .filter(Boolean)
-            .map((text) => ({ text })),
-        }
       } else if (createType === 'announcement') {
         path = '/api/items/announcements'
         payload = { title: extra || undefined, body: draft, pinned: true }
@@ -847,7 +939,7 @@ function Composer({
         </div>
       )}
 
-      {!isNote && !isReminder && (
+      {!isNote && !isReminder && !isList && (
         <div className="detail-tray">
           <span>{typeLabel(createType)}</span>
           {createType === 'file' ? (
@@ -856,14 +948,6 @@ function Composer({
               aria-label="파일 선택"
               onChange={(event) => setSelectedFile(event.target.files?.[0] ?? null)}
               type="file"
-            />
-          ) : createType === 'list' ? (
-            <textarea
-              aria-label="리스트 항목"
-              onChange={(event) => setExtra(event.target.value)}
-              placeholder="항목을 줄마다 입력"
-              rows={2}
-              value={extra}
             />
           ) : createType === 'recurring_expense' ? (
             <div className="split-fields">
@@ -927,6 +1011,14 @@ function Composer({
           >
             Add Reminder
           </button>
+        ) : isList ? (
+          <button
+            className="send-button"
+            onClick={() => setListSheetOpen(true)}
+            type="button"
+          >
+            Add List
+          </button>
         ) : (
           <button className="send-button" disabled={isSending || !canSend} type="submit">
             보내기
@@ -943,6 +1035,20 @@ function Composer({
           }}
           onSaved={(item) => {
             setReminderSheetOpen(false)
+            onCreated(item)
+            resetComposer()
+          }}
+        />
+      )}
+      {listSheetOpen && isList && (
+        <ListSheet
+          initialTitle={draft}
+          onCancel={() => {
+            setListSheetOpen(false)
+            resetComposer()
+          }}
+          onSaved={(item) => {
+            setListSheetOpen(false)
             onCreated(item)
             resetComposer()
           }}
