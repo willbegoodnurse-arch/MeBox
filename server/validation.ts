@@ -79,6 +79,10 @@ export const listInputSchema = z.object({
     .max(100),
 })
 
+export const listItemAddSchema = z.object({
+  text: z.string().trim().min(1).max(500),
+})
+
 export const announcementInputSchema = z.object({
   title: z.string().trim().max(300).optional(),
   body: z.string().trim().min(1).max(20_000),

@@ -247,9 +247,11 @@ function AuthScreen({
 
 function MessageBubble({
   item,
+  onOpenList,
   onToggleComplete,
 }: {
   item: InboxItem
+  onOpenList?: (item: InboxItem) => void
   onToggleComplete?: (id: number) => void
 }) {
   const detail = item.detail ?? {}
@@ -309,7 +311,12 @@ function MessageBubble({
       )}
 
       {item.type === 'list' && (
-        <div className="message-stack">
+        <div
+          className="message-stack"
+          onClick={onOpenList ? () => onOpenList(item) : undefined}
+          role={onOpenList ? 'button' : undefined}
+          style={onOpenList ? { cursor: 'pointer' } : undefined}
+        >
           <strong>{asText(detail.title)}</strong>
           <ul className="mini-list">
             {(Array.isArray(detail.items) ? detail.items : []).slice(0, 4).map((row) => {
@@ -363,9 +370,11 @@ function MessageBubble({
 
 function Timeline({
   items,
+  onOpenList,
   onToggleComplete,
 }: {
   items: InboxItem[]
+  onOpenList?: (item: InboxItem) => void
   onToggleComplete?: (id: number) => void
 }) {
   if (!items.length) {
@@ -378,7 +387,7 @@ function Timeline({
         <div className="day-group" key={group.title}>
           <div className="day-divider">{group.title}</div>
           {group.items.map((item) => (
-            <MessageBubble item={item} key={item.id} onToggleComplete={onToggleComplete} />
+            <MessageBubble item={item} key={item.id} onOpenList={onOpenList} onToggleComplete={onToggleComplete} />
           ))}
         </div>
       ))}
@@ -943,15 +952,114 @@ function Composer({
   )
 }
 
+function ListDetailScreen({
+  item,
+  onBack,
+  onUpdated,
+}: {
+  item: InboxItem
+  onBack: () => void
+  onUpdated: (item: InboxItem) => void
+}) {
+  const [newText, setNewText] = useState('')
+  const [adding, setAdding] = useState(false)
+
+  const detail = item.detail ?? {}
+  const listItems = (Array.isArray(detail.items) ? detail.items : []) as Array<
+    Record<string, unknown>
+  >
+  const total = listItems.length
+  const done = listItems.filter((row) => Boolean(row.completedAt)).length
+
+  async function addItem(event: FormEvent) {
+    event.preventDefault()
+    if (!newText.trim() || adding) return
+    setAdding(true)
+    try {
+      const response = await apiFetch<{ item: InboxItem }>(
+        `/api/items/lists/${item.id}/items`,
+        { method: 'POST', body: JSON.stringify({ text: newText.trim() }) },
+      )
+      onUpdated(response.item)
+      setNewText('')
+    } catch {
+      /* silent */
+    } finally {
+      setAdding(false)
+    }
+  }
+
+  async function toggleItem(listItemId: number) {
+    try {
+      const response = await apiFetch<{ item: InboxItem }>(
+        `/api/items/lists/${item.id}/items/${listItemId}/complete`,
+        { method: 'PATCH' },
+      )
+      onUpdated(response.item)
+    } catch {
+      /* silent */
+    }
+  }
+
+  return (
+    <main className="screen list-detail-screen">
+      <header className="list-detail-header">
+        <button className="text-button" onClick={onBack} type="button">
+          뒤로
+        </button>
+        <div>
+          <h1>{asText(detail.title)}</h1>
+          <span className="list-detail-count">
+            {done}/{total}
+          </span>
+        </div>
+      </header>
+
+      <div className="list-items-scroll">
+        {listItems.map((row) => (
+          <div className="list-item-row" key={String(row.id)}>
+            <button
+              aria-label={row.completedAt ? '완료 취소' : '완료'}
+              aria-pressed={Boolean(row.completedAt)}
+              className="list-item-check"
+              onClick={() => toggleItem(Number(row.id))}
+              type="button"
+            >
+              {row.completedAt ? '✓' : ''}
+            </button>
+            <span className={`list-item-text ${row.completedAt ? 'done' : ''}`}>
+              {asText(row.text)}
+            </span>
+          </div>
+        ))}
+      </div>
+
+      <form className="list-add-bar" onSubmit={addItem}>
+        <input
+          aria-label="새 항목"
+          onChange={(event) => setNewText(event.target.value)}
+          placeholder="항목 추가..."
+          value={newText}
+        />
+        <button className="list-add-btn" disabled={adding || !newText.trim()} type="submit">
+          추가
+        </button>
+      </form>
+    </main>
+  )
+}
+
 function InboxScreen({
   alerts,
   items,
   onCreated,
+  onOpenList,
   onToggleComplete,
 }: {
   alerts: AlertItem[]
   items: InboxItem[]
   onCreated: (item: InboxItem) => void
+  onOpenList: (item: InboxItem) => void
   onToggleComplete: (id: number) => void
 }) {
   const timelineRef = useRef<HTMLDivElement | null>(null)
@@ -970,7 +1078,7 @@ function InboxScreen({
         <InboxHeader alerts={alerts} />
         <AlertStrip alerts={alerts} />
         <div className="timeline-scroll" ref={timelineRef}>
-          <Timeline items={visibleItems} onToggleComplete={onToggleComplete} />
+          <Timeline items={visibleItems} onOpenList={onOpenList} onToggleComplete={onToggleComplete} />
         </div>
       </main>
       <Composer onCreated={onCreated} />
@@ -978,7 +1086,7 @@ function InboxScreen({
   )
 }
 
-function SearchScreen({ allItems }: { allItems: InboxItem[] }) {
+function SearchScreen({ allItems, onOpenList }: { allItems: InboxItem[]; onOpenList: (item: InboxItem) => void }) {
   const [query, setQuery] = useState('')
   const [activeCategory, setActiveCategory] = useState<CategoryLabel>('All')
 
@@ -1035,7 +1143,7 @@ function SearchScreen({ allItems }: { allItems: InboxItem[] }) {
 
       <section className="search-results" aria-label="검색 결과">
         {filteredItems.length ? (
-          filteredItems.map((item) => <MessageBubble item={item} key={item.id} />)
+          filteredItems.map((item) => <MessageBubble item={item} key={item.id} onOpenList={onOpenList} />)
         ) : (
           <div className="empty-thread">검색 결과가 없습니다.</div>
         )}
@@ -1670,6 +1778,7 @@ function App() {
   const [loadError, setLoadError] = useState('')
   const [settings, setSettings] = useState<SettingsResponse | null>(null)
   const [user, setUser] = useState<AuthUser | null>(null)
+  const [activeList, setActiveList] = useState<InboxItem | null>(null)
 
   async function refreshAuth() {
     try {
@@ -1768,8 +1877,19 @@ function App() {
       <div className="phone-shell">
         {loadError && <div className="offline-banner">{loadError}</div>}
 
-        {activeNav === 'search' ? (
-          <SearchScreen allItems={items} />
+        {activeList ? (
+          <ListDetailScreen
+            item={activeList}
+            onBack={() => setActiveList(null)}
+            onUpdated={(updated) => {
+              setActiveList(updated)
+              setItems((current) =>
+                current.map((i) => (i.id === updated.id ? updated : i)),
+              )
+            }}
+          />
+        ) : activeNav === 'search' ? (
+          <SearchScreen allItems={items} onOpenList={setActiveList} />
         ) : activeNav === 'settings' ? (
           <SettingsScreen
             onDeleted={handleDeleted}
@@ -1790,13 +1910,22 @@ function App() {
               setItems((current) => [...current, item])
               void refreshInbox()
             }}
+            onOpenList={setActiveList}
             onToggleComplete={(id) => {
               void toggleComplete(id)
             }}
           />
         )}
 
-        <BottomNav activeNav={activeNav} onChange={setActiveNav} />
+        {!activeList && (
+          <BottomNav
+            activeNav={activeNav}
+            onChange={(nav) => {
+              setActiveList(null)
+              setActiveNav(nav)
+            }}
+          />
+        )}
       </div>
     </div>
   )
