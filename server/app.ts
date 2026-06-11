@@ -48,6 +48,7 @@ import {
   loginInputSchema,
   linkInputSchema,
   listInputSchema,
+  listItemAddSchema,
   noteInputSchema,
   paginationSchema,
   recurringExpenseInputSchema,
@@ -411,6 +412,28 @@ export function createApp({ db, uploadDir = 'uploads' }: AppOptions) {
     return { item: getItem(db, id) }
   })
 
+  app.patch('/api/items/todos/:id/complete', async (request, reply) => {
+    const id = Number((request.params as { id: string }).id)
+    if (!Number.isInteger(id) || id <= 0) {
+      reply.code(404)
+      return { error: 'Todo not found' }
+    }
+
+    const existing = db
+      .prepare('SELECT completed_at AS completedAt FROM todos WHERE item_id = ?')
+      .get(id) as { completedAt: string | null } | undefined
+
+    if (!existing) {
+      reply.code(404)
+      return { error: 'Todo not found' }
+    }
+
+    const completedAt = existing.completedAt ? null : new Date().toISOString()
+    db.prepare('UPDATE todos SET completed_at = ? WHERE item_id = ?').run(completedAt, id)
+
+    return { item: getItem(db, id) }
+  })
+
   app.post('/api/items/lists', async (request, reply) => {
     const input = parseBody(listInputSchema, request.body)
     const id = db.transaction(() => {
@@ -435,6 +458,60 @@ export function createApp({ db, uploadDir = 'uploads' }: AppOptions) {
     })()
     reply.code(201)
     return { item: getItem(db, id) }
+  })
+
+  app.post('/api/items/lists/:id/items', async (request, reply) => {
+    const id = Number((request.params as { id: string }).id)
+    if (!Number.isInteger(id) || id <= 0) {
+      reply.code(404)
+      return { error: 'List not found' }
+    }
+
+    const list = db
+      .prepare('SELECT item_id FROM lists WHERE item_id = ?')
+      .get(id) as { item_id: number } | undefined
+
+    if (!list) {
+      reply.code(404)
+      return { error: 'List not found' }
+    }
+
+    const input = parseBody(listItemAddSchema, request.body)
+    const maxPos = db
+      .prepare('SELECT MAX(position) AS maxPos FROM list_items WHERE list_item_id = ?')
+      .get(id) as { maxPos: number | null }
+    const position = (maxPos.maxPos ?? -1) + 1
+
+    db.prepare(
+      'INSERT INTO list_items (list_item_id, text, completed_at, position) VALUES (?, ?, ?, ?)',
+    ).run(id, input.text, null, position)
+
+    reply.code(201)
+    return { item: getItem(db, id) }
+  })
+
+  app.patch('/api/items/lists/:listId/items/:itemId/complete', async (request, reply) => {
+    const listId = Number((request.params as { listId: string; itemId: string }).listId)
+    const itemId = Number((request.params as { listId: string; itemId: string }).itemId)
+
+    if (!Number.isInteger(listId) || listId <= 0 || !Number.isInteger(itemId) || itemId <= 0) {
+      reply.code(404)
+      return { error: 'List item not found' }
+    }
+
+    const existing = db
+      .prepare('SELECT id, completed_at AS completedAt FROM list_items WHERE id = ? AND list_item_id = ?')
+      .get(itemId, listId) as { id: number; completedAt: string | null } | undefined
+
+    if (!existing) {
+      reply.code(404)
+      return { error: 'List item not found' }
+    }
+
+    const completedAt = existing.completedAt ? null : new Date().toISOString()
+    db.prepare('UPDATE list_items SET completed_at = ? WHERE id = ?').run(completedAt, itemId)
+
+    return { item: getItem(db, listId) }
   })
 
   app.post('/api/items/announcements', async (request, reply) => {

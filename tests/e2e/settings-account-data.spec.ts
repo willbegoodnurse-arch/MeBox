@@ -88,10 +88,30 @@ async function createLink(page: Page, url: string, title: string) {
   await expect(page.getByText(title)).toBeVisible()
 }
 
+async function startLink(page: Page, url: string, title: string) {
+  await page.locator('.plus-button').click()
+  await page.locator('.create-sheet button').nth(1).click()
+  await page.locator('.detail-tray input').fill(title)
+  await page.locator('.composer-row input').fill(url)
+}
+
 async function createTodo(page: Page, title: string) {
   await page.locator('.plus-button').click()
   await page.locator('.create-sheet button').nth(2).click()
   await page.locator('.composer-row input').fill(title)
+  await page.getByRole('button', { name: 'Add Reminder' }).click()
+  const sheet = page.locator('.reminder-sheet')
+  await expect(sheet).toBeVisible()
+  await sheet.getByRole('button', { name: 'Save' }).click()
+  await expect(sheet).toBeHidden()
+  await expect(page.getByText(title).first()).toBeVisible()
+}
+
+async function createAnnouncement(page: Page, title: string, body: string) {
+  await page.locator('.plus-button').click()
+  await page.locator('.create-sheet button').nth(5).click()
+  await page.locator('.detail-tray input').fill(title)
+  await page.locator('.composer-row input').fill(body)
   await page.locator('.send-button').click()
   await expect(page.getByText(title)).toBeVisible()
 }
@@ -185,6 +205,90 @@ test('username change invalidates the old username and allows login with the new
 
   await login(page, 'admin2')
   await expectMainApp(page)
+})
+
+test('inbox category filters preserve oldest-to-newest order and render links as anchors', async ({
+  page,
+}) => {
+  await createAccount(page)
+  const items = await createInboxFixture(page, 'category-filter')
+
+  // Inbox is a view-only timeline: no category filter row and no search icon.
+  await expect(page.locator('.category-filter-row')).toHaveCount(0)
+  await expect(page.locator('.chat-header .icon-button')).toHaveCount(0)
+
+  // Search owns category filtering. Switch to the Search tab.
+  await page.locator('.bottom-nav button').nth(1).click()
+
+  const filterRow = page.locator('.filter-row')
+  await expect(filterRow.locator('button')).toHaveText([
+    'All',
+    'Chat',
+    'Link',
+    'Reminders',
+    'List',
+    'File',
+    'Notification',
+    'Fixed',
+  ])
+
+  // Default category is All: all three items visible, oldest-to-newest.
+  await expect(page.locator('.message-bubble')).toHaveCount(3)
+  await expect(page.locator('.message-bubble').nth(0)).toContainText(items.note)
+  await expect(page.locator('.message-bubble').nth(1)).toContainText(items.linkTitle)
+  await expect(page.locator('.message-bubble').nth(2)).toContainText(items.todo)
+
+  const link = page.locator('.message-link a.message-url')
+  await expect(link).toHaveAttribute('href', 'https://example.test/category-filter')
+  await expect(link).toHaveAttribute('target', '_blank')
+  await expect(link).toHaveAttribute('rel', 'noreferrer noopener')
+
+  await filterRow.getByRole('button', { name: 'Link', exact: true }).click()
+  await expect(page.getByText(items.linkTitle)).toBeVisible()
+  await expect(page.getByText(items.note)).toBeHidden()
+  await expect(page.getByText(items.todo)).toBeHidden()
+
+  await filterRow.getByRole('button', { name: 'Reminders', exact: true }).click()
+  await expect(page.getByText(items.todo)).toBeVisible()
+  await expect(page.getByText(items.linkTitle)).toBeHidden()
+
+  await filterRow.getByRole('button', { name: 'All', exact: true }).click()
+  await expect(page.getByText(items.note)).toBeVisible()
+  await expect(page.getByText(items.linkTitle)).toBeVisible()
+  await expect(page.getByText(items.todo)).toBeVisible()
+})
+
+test('link input normalizes common URLs and rejects invalid URLs with a specific error', async ({
+  page,
+}) => {
+  await createAccount(page)
+  await startLink(page, 'WWW.NAVER.COM', 'Uppercase Naver')
+  await page.locator('.send-button').click()
+  await expect(page.getByText('Uppercase Naver')).toBeVisible()
+
+  const link = page.locator('.message-link a.message-url')
+  await expect(link).toHaveText('https://www.naver.com')
+  await expect(link).toHaveAttribute('href', 'https://www.naver.com')
+  await expect(link).toHaveAttribute('target', '_blank')
+  await expect(link).toHaveAttribute('rel', 'noreferrer noopener')
+
+  await startLink(page, 'not a url', 'Invalid URL')
+  await page.locator('.send-button').click()
+  await expect(page.getByText('올바른 URL을 입력하세요.')).toBeVisible()
+  await expect(page.getByText('Invalid URL')).toHaveCount(0)
+})
+
+test('only reminder cards render checkbox markers', async ({ page }) => {
+  await createAccount(page)
+  await createNote(page, 'No checkbox chat')
+  await createLink(page, 'https://example.test/no-checkbox', 'No checkbox link')
+  await createTodo(page, 'Reminder checkbox')
+  await createAnnouncement(page, 'No checkbox notification', 'Notification body')
+
+  await expect(page.locator('.message-bubble.message-note .todo-check')).toHaveCount(0)
+  await expect(page.locator('.message-bubble.message-link .todo-check')).toHaveCount(0)
+  await expect(page.locator('.message-bubble.message-announcement .todo-check')).toHaveCount(0)
+  await expect(page.locator('.message-bubble.message-todo .todo-check')).toHaveCount(1)
 })
 
 test('plain JSON export/import round trip restores visible inbox items after reload', async ({

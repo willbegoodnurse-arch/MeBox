@@ -9,8 +9,52 @@ export const noteInputSchema = z.object({
   body: z.string().trim().min(1).max(20_000),
 })
 
+function normalizeLinkUrl(input: string) {
+  const trimmed = input.trim()
+
+  if (!trimmed || /\s/.test(trimmed)) {
+    return null
+  }
+
+  const withProtocol = /^[a-z][a-z0-9+.-]*:\/\//i.test(trimmed)
+    ? trimmed
+    : `https://${trimmed}`
+
+  try {
+    const url = new URL(withProtocol)
+    const protocol = url.protocol.toLowerCase()
+    const hostname = url.hostname.toLowerCase()
+
+    if (!['http:', 'https:'].includes(protocol)) {
+      return null
+    }
+
+    if (!hostname || (!hostname.includes('.') && hostname !== 'localhost')) {
+      return null
+    }
+
+    url.protocol = protocol
+    url.hostname = hostname
+
+    if ((url.pathname === '/' || url.pathname === '') && !url.search && !url.hash) {
+      return `${url.protocol}//${url.host}`
+    }
+
+    return url.toString()
+  } catch {
+    return null
+  }
+}
+
+const linkUrlSchema = z
+  .string()
+  .trim()
+  .min(1)
+  .refine((value) => normalizeLinkUrl(value) !== null)
+  .transform((value) => normalizeLinkUrl(value) ?? value)
+
 export const linkInputSchema = z.object({
-  url: z.url(),
+  url: linkUrlSchema,
   title: z.string().trim().max(300).optional(),
   memo: z.string().trim().max(5_000).optional(),
   tags: z.array(z.string().trim().min(1).max(40)).max(20).default([]),
@@ -33,6 +77,10 @@ export const listInputSchema = z.object({
     )
     .min(1)
     .max(100),
+})
+
+export const listItemAddSchema = z.object({
+  text: z.string().trim().min(1).max(500),
 })
 
 export const announcementInputSchema = z.object({

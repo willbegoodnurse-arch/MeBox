@@ -1,14 +1,16 @@
-import { useEffect, useState, type FormEvent, type ReactNode } from 'react'
+import { useEffect, useMemo, useRef, useState, type FormEvent, type ReactNode } from 'react'
+import {
+  categoryForItemType,
+  categoryLabels,
+  filterItemsByCategory,
+  formatDateTitle,
+  formatMessageTime,
+  normalizeLinkUrl,
+  sortItemsOldestFirst,
+  type CategoryLabel,
+  type ItemType,
+} from './inboxDisplay'
 import './App.css'
-
-type ItemType =
-  | 'note'
-  | 'link'
-  | 'todo'
-  | 'list'
-  | 'file'
-  | 'announcement'
-  | 'recurring_expense'
 
 type InboxItem = {
   id: number
@@ -62,23 +64,13 @@ type CreateType =
   | 'recurring_expense'
 
 const createTypes: { type: CreateType; label: string }[] = [
-  { type: 'note', label: '메모' },
-  { type: 'link', label: '링크' },
-  { type: 'todo', label: '할일' },
-  { type: 'list', label: '리스트' },
-  { type: 'file', label: '파일' },
-  { type: 'announcement', label: '공지' },
-  { type: 'recurring_expense', label: '지출' },
-]
-
-const searchTypes: { type: ItemType | 'all'; label: string }[] = [
-  { type: 'all', label: '전체' },
-  { type: 'note', label: '메모' },
-  { type: 'link', label: '링크' },
-  { type: 'todo', label: '할일' },
-  { type: 'file', label: '파일' },
-  { type: 'announcement', label: '공지' },
-  { type: 'recurring_expense', label: '지출' },
+  { type: 'note', label: 'Chat' },
+  { type: 'link', label: 'Link' },
+  { type: 'todo', label: 'Reminders' },
+  { type: 'list', label: 'List' },
+  { type: 'file', label: 'File' },
+  { type: 'announcement', label: 'Notification' },
+  { type: 'recurring_expense', label: 'Fixed' },
 ]
 
 const reminderOptions = [
@@ -149,57 +141,14 @@ function formatBytes(value: number) {
 }
 
 function typeLabel(type: ItemType) {
-  switch (type) {
-    case 'note':
-      return '메모'
-    case 'link':
-      return '링크'
-    case 'todo':
-      return '할일'
-    case 'list':
-      return '리스트'
-    case 'file':
-      return '파일'
-    case 'announcement':
-      return '공지'
-    case 'recurring_expense':
-      return '지출'
-  }
-}
-
-function dateTitle(value: string) {
-  const date = new Date(value)
-  const today = new Date()
-  const yesterday = new Date()
-  yesterday.setDate(today.getDate() - 1)
-
-  if (date.toDateString() === today.toDateString()) {
-    return '오늘'
-  }
-
-  if (date.toDateString() === yesterday.toDateString()) {
-    return '어제'
-  }
-
-  return new Intl.DateTimeFormat('ko-KR', {
-    month: 'long',
-    day: 'numeric',
-    weekday: 'short',
-  }).format(date)
-}
-
-function timeText(value: string) {
-  return new Intl.DateTimeFormat('ko-KR', {
-    hour: '2-digit',
-    minute: '2-digit',
-  }).format(new Date(value))
+  return categoryForItemType(type)
 }
 
 function groupItems(items: InboxItem[]) {
   const groups: { title: string; items: InboxItem[] }[] = []
 
   for (const item of items) {
-    const title = dateTitle(item.createdAt)
+    const title = formatDateTitle(item.createdAt)
     const group = groups.find((entry) => entry.title === title)
 
     if (group) {
@@ -296,14 +245,22 @@ function AuthScreen({
   )
 }
 
-function MessageBubble({ item }: { item: InboxItem }) {
+function MessageBubble({
+  item,
+  onOpenList,
+  onToggleComplete,
+}: {
+  item: InboxItem
+  onOpenList?: (item: InboxItem) => void
+  onToggleComplete?: (id: number) => void
+}) {
   const detail = item.detail ?? {}
 
   return (
     <article className={`message-bubble message-${item.type}`}>
       <div className="message-label">
-        <span>{typeLabel(item.type)}</span>
-        <time>{timeText(item.createdAt)}</time>
+        <span className="category-badge">{typeLabel(item.type)}</span>
+        <time>{formatMessageTime(item.createdAt)}</time>
       </div>
 
       {item.type === 'note' && <p className="message-text">{asText(detail.text)}</p>}
@@ -312,28 +269,63 @@ function MessageBubble({ item }: { item: InboxItem }) {
         <div className="message-stack">
           <strong>{asText(detail.title) || asText(detail.url)}</strong>
           {asText(detail.memo) && <p>{asText(detail.memo)}</p>}
-          <span className="message-url">{asText(detail.url)}</span>
+          <a
+            className="message-url"
+            href={asText(detail.url)}
+            rel="noreferrer noopener"
+            target="_blank"
+          >
+            {asText(detail.url)}
+          </a>
         </div>
       )}
 
       {item.type === 'todo' && (
         <div className="todo-line">
-          <span className="fake-check" aria-hidden="true">
-            {asText(detail.completedAt) ? '✓' : ''}
-          </span>
-          <span>{asText(detail.title)}</span>
+          {onToggleComplete ? (
+            <button
+              aria-label={asText(detail.completedAt) ? '완료 취소' : '완료'}
+              aria-pressed={Boolean(asText(detail.completedAt))}
+              className="todo-check"
+              onClick={() => onToggleComplete(item.id)}
+              type="button"
+            >
+              {asText(detail.completedAt) ? '✓' : ''}
+            </button>
+          ) : (
+            <span className="todo-check" aria-hidden="true">
+              {asText(detail.completedAt) ? '✓' : ''}
+            </span>
+          )}
+          <div className="todo-content">
+            <span className={asText(detail.completedAt) ? 'todo-done' : ''}>
+              {asText(detail.title)}
+            </span>
+            {asText(detail.dueAt) && (
+              <span className="reminder-due">
+                {formatDateTitle(asText(detail.dueAt))} {formatMessageTime(asText(detail.dueAt))}
+              </span>
+            )}
+          </div>
         </div>
       )}
 
       {item.type === 'list' && (
-        <div className="message-stack">
+        <div
+          className="message-stack"
+          onClick={onOpenList ? () => onOpenList(item) : undefined}
+          role={onOpenList ? 'button' : undefined}
+          style={onOpenList ? { cursor: 'pointer' } : undefined}
+        >
           <strong>{asText(detail.title)}</strong>
           <ul className="mini-list">
             {(Array.isArray(detail.items) ? detail.items : []).slice(0, 4).map((row) => {
               const listItem = row as Record<string, unknown>
               return (
                 <li key={String(listItem.id)}>
-                  <span aria-hidden="true">{asText(listItem.completedAt) ? '✓' : '□'}</span>
+                  <span className="list-marker" aria-hidden="true">
+                    •
+                  </span>
                   {asText(listItem.text)}
                 </li>
               )
@@ -357,8 +349,8 @@ function MessageBubble({ item }: { item: InboxItem }) {
       )}
 
       {item.type === 'announcement' && (
-        <div className="message-stack">
-          <strong>{asText(detail.title) || '공지'}</strong>
+        <div className="message-stack notification-content">
+          <strong>{asText(detail.title) || 'Notification'}</strong>
           <p>{asText(detail.body)}</p>
         </div>
       )}
@@ -376,7 +368,15 @@ function MessageBubble({ item }: { item: InboxItem }) {
   )
 }
 
-function Timeline({ items }: { items: InboxItem[] }) {
+function Timeline({
+  items,
+  onOpenList,
+  onToggleComplete,
+}: {
+  items: InboxItem[]
+  onOpenList?: (item: InboxItem) => void
+  onToggleComplete?: (id: number) => void
+}) {
   if (!items.length) {
     return <div className="empty-thread">아직 아무 것도 없습니다. 첫 메모를 보내세요.</div>
   }
@@ -387,7 +387,7 @@ function Timeline({ items }: { items: InboxItem[] }) {
         <div className="day-group" key={group.title}>
           <div className="day-divider">{group.title}</div>
           {group.items.map((item) => (
-            <MessageBubble item={item} key={item.id} />
+            <MessageBubble item={item} key={item.id} onOpenList={onOpenList} onToggleComplete={onToggleComplete} />
           ))}
         </div>
       ))}
@@ -395,12 +395,10 @@ function Timeline({ items }: { items: InboxItem[] }) {
   )
 }
 
-function Header({
+function InboxHeader({
   alerts,
-  onSearch,
 }: {
   alerts: AlertItem[]
-  onSearch: () => void
 }) {
   return (
     <header className="chat-header">
@@ -408,9 +406,6 @@ function Header({
         <h1>MeBox</h1>
         <p>{alerts.length ? `${alerts.length}개 알림` : '개인 인박스'}</p>
       </div>
-      <button aria-label="검색 열기" className="icon-button" onClick={onSearch} type="button">
-        ⌕
-      </button>
     </header>
   )
 }
@@ -432,6 +427,391 @@ function AlertStrip({ alerts }: { alerts: AlertItem[] }) {
   )
 }
 
+const repeatOptions = ['Never', 'Daily', 'Weekly', 'Monthly'] as const
+type RepeatOption = (typeof repeatOptions)[number]
+
+const advanceNoticeOptions: { label: string; value: number | null }[] = [
+  { label: '5 min', value: 5 },
+  { label: '15 min', value: 15 },
+  { label: '30 min', value: 30 },
+  { label: '1 hour', value: 60 },
+  { label: '2 hours', value: 120 },
+  { label: '1 day', value: 1440 },
+  { label: 'None', value: null },
+]
+
+const weekdayLabels = ['Su', 'Mo', 'Tu', 'We', 'Th', 'Fr', 'Sa']
+
+function startOfMonth(date: Date) {
+  return new Date(date.getFullYear(), date.getMonth(), 1)
+}
+
+function sameYmd(left: Date, right: Date) {
+  return (
+    left.getFullYear() === right.getFullYear() &&
+    left.getMonth() === right.getMonth() &&
+    left.getDate() === right.getDate()
+  )
+}
+
+function buildCalendarDays(viewMonth: Date) {
+  const first = startOfMonth(viewMonth)
+  const gridStart = new Date(first)
+  gridStart.setDate(first.getDate() - first.getDay())
+
+  return Array.from({ length: 42 }, (_, index) => {
+    const day = new Date(gridStart)
+    day.setDate(gridStart.getDate() + index)
+    return day
+  })
+}
+
+function pad2(value: number) {
+  return value.toString().padStart(2, '0')
+}
+
+function ReminderSheet({
+  initialTitle,
+  onCancel,
+  onSaved,
+}: {
+  initialTitle: string
+  onCancel: () => void
+  onSaved: (item: InboxItem) => void
+}) {
+  const now = new Date()
+  const [visible, setVisible] = useState(false)
+  const [title, setTitle] = useState(initialTitle)
+  const [viewMonth, setViewMonth] = useState(() => startOfMonth(now))
+  const [selectedDate, setSelectedDate] = useState(
+    () => new Date(now.getFullYear(), now.getMonth(), now.getDate()),
+  )
+  const [hour, setHour] = useState(pad2(now.getHours()))
+  const [minute, setMinute] = useState(pad2(now.getMinutes()))
+  const [allDay, setAllDay] = useState(false)
+  const [repeat, setRepeat] = useState<RepeatOption>('Never')
+  const [advanceMinutes, setAdvanceMinutes] = useState<number | null>(15)
+  const [error, setError] = useState('')
+  const [saving, setSaving] = useState(false)
+
+  useEffect(() => {
+    const frame = window.requestAnimationFrame(() => setVisible(true))
+    return () => window.cancelAnimationFrame(frame)
+  }, [])
+
+  const calendarDays = useMemo(() => buildCalendarDays(viewMonth), [viewMonth])
+  const monthLabel = new Intl.DateTimeFormat(undefined, {
+    month: 'long',
+    year: 'numeric',
+  }).format(viewMonth)
+  const canSave = title.trim().length > 0 && !saving
+
+  function close(after: () => void) {
+    setVisible(false)
+    window.setTimeout(after, 280)
+  }
+
+  function shiftMonth(delta: number) {
+    setViewMonth((current) => new Date(current.getFullYear(), current.getMonth() + delta, 1))
+  }
+
+  async function save() {
+    if (!title.trim()) {
+      setError('제목을 입력하세요.')
+      return
+    }
+
+    setSaving(true)
+    setError('')
+
+    const hours = allDay ? 0 : Number(hour) || 0
+    const minutes = allDay ? 0 : Number(minute) || 0
+    const due = new Date(
+      selectedDate.getFullYear(),
+      selectedDate.getMonth(),
+      selectedDate.getDate(),
+      hours,
+      minutes,
+      0,
+      0,
+    )
+
+    try {
+      const response = await apiFetch<{ item: InboxItem }>('/api/items/todos', {
+        method: 'POST',
+        body: JSON.stringify({
+          title: title.trim(),
+          dueAt: due.toISOString(),
+          repeat,
+          advanceMinutes,
+        }),
+      })
+      close(() => onSaved(response.item))
+    } catch {
+      setError('저장하지 못했습니다.')
+      setSaving(false)
+    }
+  }
+
+  return (
+    <div
+      className="reminder-sheet-overlay"
+      role="dialog"
+      aria-modal="true"
+      aria-label="New Reminder"
+    >
+      <div className={`reminder-sheet ${visible ? 'open' : ''}`}>
+        <header className="reminder-sheet-header">
+          <button className="sheet-cancel-btn" onClick={() => close(onCancel)} type="button">
+            Cancel
+          </button>
+          <h2>New Reminder</h2>
+          <button className="sheet-save-btn" disabled={!canSave} onClick={save} type="button">
+            Save
+          </button>
+        </header>
+
+        <div className="reminder-sheet-body">
+          <section className="reminder-section">
+            <span className="reminder-section-label">Title</span>
+            <input
+              aria-label="제목"
+              className="reminder-input"
+              onChange={(event) => setTitle(event.target.value)}
+              placeholder="제목 입력"
+              value={title}
+            />
+          </section>
+
+          <section className="reminder-section">
+            <span className="reminder-section-label">Date &amp; Time</span>
+            <div className="cal-header">
+              <button
+                aria-label="이전 달"
+                className="cal-nav"
+                onClick={() => shiftMonth(-1)}
+                type="button"
+              >
+                ‹
+              </button>
+              <strong>{monthLabel}</strong>
+              <button
+                aria-label="다음 달"
+                className="cal-nav"
+                onClick={() => shiftMonth(1)}
+                type="button"
+              >
+                ›
+              </button>
+            </div>
+            <div className="calendar-grid">
+              {weekdayLabels.map((label) => (
+                <div className="cal-weekday" key={label}>
+                  {label}
+                </div>
+              ))}
+              {calendarDays.map((day) => {
+                const classes = ['cal-day']
+                if (day.getMonth() !== viewMonth.getMonth()) {
+                  classes.push('other-month')
+                }
+                if (sameYmd(day, now)) {
+                  classes.push('today')
+                }
+                if (sameYmd(day, selectedDate)) {
+                  classes.push('selected')
+                }
+
+                return (
+                  <button
+                    className={classes.join(' ')}
+                    key={day.toISOString()}
+                    onClick={() =>
+                      setSelectedDate(
+                        new Date(day.getFullYear(), day.getMonth(), day.getDate()),
+                      )
+                    }
+                    type="button"
+                  >
+                    {day.getDate()}
+                  </button>
+                )
+              })}
+            </div>
+          </section>
+
+          <section className="reminder-section">
+            <span className="reminder-section-label">Time</span>
+            <div className="time-row">
+              <button
+                className={`allday-toggle ${allDay ? 'active' : ''}`}
+                onClick={() => setAllDay((value) => !value)}
+                type="button"
+              >
+                All Day
+              </button>
+              {!allDay && (
+                <div className="time-inputs">
+                  <input
+                    aria-label="시"
+                    className="reminder-input time-field"
+                    inputMode="numeric"
+                    max="23"
+                    min="0"
+                    onChange={(event) => setHour(event.target.value)}
+                    type="number"
+                    value={hour}
+                  />
+                  <span>:</span>
+                  <input
+                    aria-label="분"
+                    className="reminder-input time-field"
+                    inputMode="numeric"
+                    max="59"
+                    min="0"
+                    onChange={(event) => setMinute(event.target.value)}
+                    type="number"
+                    value={minute}
+                  />
+                </div>
+              )}
+            </div>
+          </section>
+
+          <section className="reminder-section">
+            <span className="reminder-section-label">Repeat</span>
+            <div className="option-row">
+              {repeatOptions.map((option) => (
+                <button
+                  className={`option-chip ${repeat === option ? 'selected' : ''}`}
+                  key={option}
+                  onClick={() => setRepeat(option)}
+                  type="button"
+                >
+                  {option}
+                </button>
+              ))}
+            </div>
+          </section>
+
+          <section className="reminder-section">
+            <span className="reminder-section-label">Advance Notice</span>
+            <div className="option-row">
+              {advanceNoticeOptions.map((option) => (
+                <button
+                  className={`option-chip ${advanceMinutes === option.value ? 'selected' : ''}`}
+                  key={option.label}
+                  onClick={() => setAdvanceMinutes(option.value)}
+                  type="button"
+                >
+                  {option.label}
+                </button>
+              ))}
+            </div>
+          </section>
+
+          {error && <p className="sheet-error">{error}</p>}
+        </div>
+      </div>
+    </div>
+  )
+}
+
+function ListSheet({
+  initialTitle,
+  onCancel,
+  onSaved,
+}: {
+  initialTitle: string
+  onCancel: () => void
+  onSaved: (item: InboxItem) => void
+}) {
+  const [visible, setVisible] = useState(false)
+  const [title, setTitle] = useState(initialTitle)
+  const [itemsText, setItemsText] = useState('')
+  const [error, setError] = useState('')
+  const [saving, setSaving] = useState(false)
+
+  useEffect(() => {
+    const frame = window.requestAnimationFrame(() => setVisible(true))
+    return () => window.cancelAnimationFrame(frame)
+  }, [])
+
+  const canSave = title.trim().length > 0 && !saving
+
+  function close(after: () => void) {
+    setVisible(false)
+    window.setTimeout(after, 280)
+  }
+
+  async function save() {
+    if (!title.trim()) return
+    setSaving(true)
+    setError('')
+
+    const items = itemsText
+      .split('\n')
+      .map((text) => text.trim())
+      .filter(Boolean)
+      .map((text) => ({ text }))
+
+    try {
+      const response = await apiFetch<{ item: InboxItem }>('/api/items/lists', {
+        method: 'POST',
+        body: JSON.stringify({ title: title.trim(), items: items.length ? items : [{ text: title.trim() }] }),
+      })
+      close(() => onSaved(response.item))
+    } catch {
+      setError('저장하지 못했습니다.')
+      setSaving(false)
+    }
+  }
+
+  return (
+    <div className="list-sheet-overlay" role="dialog" aria-modal="true" aria-label="New List">
+      <div className={`list-sheet ${visible ? 'open' : ''}`}>
+        <header className="reminder-sheet-header">
+          <button className="sheet-cancel-btn" onClick={() => close(onCancel)} type="button">
+            Cancel
+          </button>
+          <h2>New List</h2>
+          <button className="sheet-save-btn" disabled={!canSave} onClick={save} type="button">
+            Save
+          </button>
+        </header>
+
+        <div className="reminder-sheet-body">
+          <section className="reminder-section">
+            <span className="reminder-section-label">Title</span>
+            <input
+              autoFocus
+              aria-label="리스트 이름"
+              className="reminder-input"
+              onChange={(event) => setTitle(event.target.value)}
+              placeholder="리스트 이름"
+              value={title}
+            />
+          </section>
+
+          <section className="reminder-section">
+            <span className="reminder-section-label">Items</span>
+            <textarea
+              aria-label="리스트 항목"
+              className="reminder-input"
+              onChange={(event) => setItemsText(event.target.value)}
+              placeholder="항목을 줄마다 입력"
+              rows={5}
+              value={itemsText}
+            />
+          </section>
+
+          {error && <p className="sheet-error">{error}</p>}
+        </div>
+      </div>
+    </div>
+  )
+}
+
 function Composer({
   onCreated,
 }: {
@@ -445,10 +825,20 @@ function Composer({
   const [billingDay, setBillingDay] = useState('1')
   const [selectedFile, setSelectedFile] = useState<File | null>(null)
   const [isSending, setIsSending] = useState(false)
+  const [reminderSheetOpen, setReminderSheetOpen] = useState(false)
+  const [listSheetOpen, setListSheetOpen] = useState(false)
   const [error, setError] = useState('')
 
   const isNote = createType === 'note'
-  const placeholder = isNote ? '나에게 입력...' : `${typeLabel(createType)} 입력...`
+  const isReminder = createType === 'todo'
+  const isList = createType === 'list'
+  const placeholder = isNote
+    ? '나에게 입력...'
+    : createType === 'list'
+      ? '리스트 제목 입력...'
+      : isReminder
+        ? 'Reminder 제목 입력...'
+        : `${typeLabel(createType)} 입력...`
   const canSend = createType === 'file' ? selectedFile !== null : draft.trim().length > 0
 
   function resetComposer() {
@@ -462,6 +852,17 @@ function Composer({
 
   async function submit(event: FormEvent) {
     event.preventDefault()
+
+    if (isReminder) {
+      setReminderSheetOpen(true)
+      return
+    }
+
+    if (isList) {
+      setListSheetOpen(true)
+      return
+    }
+
     setIsSending(true)
     setError('')
 
@@ -481,21 +882,14 @@ function Composer({
       let payload: Record<string, unknown> = { body: draft }
 
       if (createType === 'link') {
-        path = '/api/items/links'
-        payload = { url: draft, title: extra || undefined }
-      } else if (createType === 'todo') {
-        path = '/api/items/todos'
-        payload = { title: draft, dueAt: extra ? new Date(extra).toISOString() : undefined }
-      } else if (createType === 'list') {
-        path = '/api/items/lists'
-        payload = {
-          title: draft,
-          items: extra
-            .split('\n')
-            .map((text) => text.trim())
-            .filter(Boolean)
-            .map((text) => ({ text })),
+        const normalizedUrl = normalizeLinkUrl(draft)
+        if (!normalizedUrl) {
+          setError('올바른 URL을 입력하세요.')
+          return
         }
+
+        path = '/api/items/links'
+        payload = { url: normalizedUrl, title: extra || undefined }
       } else if (createType === 'announcement') {
         path = '/api/items/announcements'
         payload = { title: extra || undefined, body: draft, pinned: true }
@@ -524,6 +918,7 @@ function Composer({
   }
 
   return (
+    <>
     <form className="composer" onSubmit={submit}>
       {menuOpen && (
         <div className="create-sheet" aria-label="생성 메뉴">
@@ -544,7 +939,7 @@ function Composer({
         </div>
       )}
 
-      {!isNote && (
+      {!isNote && !isReminder && !isList && (
         <div className="detail-tray">
           <span>{typeLabel(createType)}</span>
           {createType === 'file' ? (
@@ -553,21 +948,6 @@ function Composer({
               aria-label="파일 선택"
               onChange={(event) => setSelectedFile(event.target.files?.[0] ?? null)}
               type="file"
-            />
-          ) : createType === 'todo' ? (
-            <input
-              aria-label="마감일"
-              onChange={(event) => setExtra(event.target.value)}
-              type="datetime-local"
-              value={extra}
-            />
-          ) : createType === 'list' ? (
-            <textarea
-              aria-label="리스트 항목"
-              onChange={(event) => setExtra(event.target.value)}
-              placeholder="항목을 줄마다 입력"
-              rows={2}
-              value={extra}
             />
           ) : createType === 'recurring_expense' ? (
             <div className="split-fields">
@@ -623,11 +1003,155 @@ function Composer({
           placeholder={createType === 'file' ? selectedFile?.name ?? '파일 선택' : placeholder}
           value={createType === 'file' ? selectedFile?.name ?? '' : draft}
         />
-        <button className="send-button" disabled={isSending || !canSend} type="submit">
-          보내기
-        </button>
+        {isReminder ? (
+          <button
+            className="send-button"
+            onClick={() => setReminderSheetOpen(true)}
+            type="button"
+          >
+            Add Reminder
+          </button>
+        ) : isList ? (
+          <button
+            className="send-button"
+            onClick={() => setListSheetOpen(true)}
+            type="button"
+          >
+            Add List
+          </button>
+        ) : (
+          <button className="send-button" disabled={isSending || !canSend} type="submit">
+            보내기
+          </button>
+        )}
       </div>
     </form>
+      {reminderSheetOpen && isReminder && (
+        <ReminderSheet
+          initialTitle={draft}
+          onCancel={() => {
+            setReminderSheetOpen(false)
+            resetComposer()
+          }}
+          onSaved={(item) => {
+            setReminderSheetOpen(false)
+            onCreated(item)
+            resetComposer()
+          }}
+        />
+      )}
+      {listSheetOpen && isList && (
+        <ListSheet
+          initialTitle={draft}
+          onCancel={() => {
+            setListSheetOpen(false)
+            resetComposer()
+          }}
+          onSaved={(item) => {
+            setListSheetOpen(false)
+            onCreated(item)
+            resetComposer()
+          }}
+        />
+      )}
+    </>
+  )
+}
+
+function ListDetailScreen({
+  item,
+  onBack,
+  onUpdated,
+}: {
+  item: InboxItem
+  onBack: () => void
+  onUpdated: (item: InboxItem) => void
+}) {
+  const [newText, setNewText] = useState('')
+  const [adding, setAdding] = useState(false)
+
+  const detail = item.detail ?? {}
+  const listItems = (Array.isArray(detail.items) ? detail.items : []) as Array<
+    Record<string, unknown>
+  >
+  const total = listItems.length
+  const done = listItems.filter((row) => Boolean(row.completedAt)).length
+
+  async function addItem(event: FormEvent) {
+    event.preventDefault()
+    if (!newText.trim() || adding) return
+    setAdding(true)
+    try {
+      const response = await apiFetch<{ item: InboxItem }>(
+        `/api/items/lists/${item.id}/items`,
+        { method: 'POST', body: JSON.stringify({ text: newText.trim() }) },
+      )
+      onUpdated(response.item)
+      setNewText('')
+    } catch {
+      /* silent */
+    } finally {
+      setAdding(false)
+    }
+  }
+
+  async function toggleItem(listItemId: number) {
+    try {
+      const response = await apiFetch<{ item: InboxItem }>(
+        `/api/items/lists/${item.id}/items/${listItemId}/complete`,
+        { method: 'PATCH' },
+      )
+      onUpdated(response.item)
+    } catch {
+      /* silent */
+    }
+  }
+
+  return (
+    <main className="screen list-detail-screen">
+      <header className="list-detail-header">
+        <button className="text-button" onClick={onBack} type="button">
+          뒤로
+        </button>
+        <div>
+          <h1>{asText(detail.title)}</h1>
+          <span className="list-detail-count">
+            {done}/{total}
+          </span>
+        </div>
+      </header>
+
+      <div className="list-items-scroll">
+        {listItems.map((row) => (
+          <div className="list-item-row" key={String(row.id)}>
+            <button
+              aria-label={row.completedAt ? '완료 취소' : '완료'}
+              aria-pressed={Boolean(row.completedAt)}
+              className="list-item-check"
+              onClick={() => toggleItem(Number(row.id))}
+              type="button"
+            >
+              {row.completedAt ? '✓' : ''}
+            </button>
+            <span className={`list-item-text ${row.completedAt ? 'done' : ''}`}>
+              {asText(row.text)}
+            </span>
+          </div>
+        ))}
+      </div>
+
+      <form className="list-add-bar" onSubmit={addItem}>
+        <input
+          aria-label="새 항목"
+          onChange={(event) => setNewText(event.target.value)}
+          placeholder="항목 추가..."
+          value={newText}
+        />
+        <button className="list-add-btn" disabled={adding || !newText.trim()} type="submit">
+          추가
+        </button>
+      </form>
+    </main>
   )
 }
 
@@ -635,57 +1159,72 @@ function InboxScreen({
   alerts,
   items,
   onCreated,
-  onSearch,
+  onOpenList,
+  onToggleComplete,
 }: {
   alerts: AlertItem[]
   items: InboxItem[]
   onCreated: (item: InboxItem) => void
-  onSearch: () => void
+  onOpenList: (item: InboxItem) => void
+  onToggleComplete: (id: number) => void
 }) {
+  const timelineRef = useRef<HTMLDivElement | null>(null)
+  const visibleItems = useMemo(() => sortItemsOldestFirst(items), [items])
+
+  useEffect(() => {
+    const timeline = timelineRef.current
+    if (timeline) {
+      timeline.scrollTop = timeline.scrollHeight
+    }
+  }, [visibleItems.length])
+
   return (
     <>
       <main className="screen inbox-screen">
-        <Header alerts={alerts} onSearch={onSearch} />
+        <InboxHeader alerts={alerts} />
         <AlertStrip alerts={alerts} />
-        <Timeline items={items} />
+        <div className="timeline-scroll" ref={timelineRef}>
+          <Timeline items={visibleItems} onOpenList={onOpenList} onToggleComplete={onToggleComplete} />
+        </div>
       </main>
       <Composer onCreated={onCreated} />
     </>
   )
 }
 
-function SearchScreen() {
+function SearchScreen({ allItems, onOpenList }: { allItems: InboxItem[]; onOpenList: (item: InboxItem) => void }) {
   const [query, setQuery] = useState('')
-  const [type, setType] = useState<ItemType | 'all'>('all')
-  const [items, setItems] = useState<InboxItem[]>([])
-  const [error, setError] = useState('')
+  const [activeCategory, setActiveCategory] = useState<CategoryLabel>('All')
 
-  async function runSearch(event: FormEvent) {
-    event.preventDefault()
+  const filteredItems = useMemo(() => {
+    const byCategory = filterItemsByCategory(allItems, activeCategory)
     if (!query.trim()) {
-      setItems([])
-      return
+      return sortItemsOldestFirst(byCategory)
     }
 
-    const params = new URLSearchParams({ q: query })
-    if (type !== 'all') {
-      params.set('type', type)
-    }
-
-    try {
-      const response = await apiFetch<{ items: InboxItem[] }>(
-        `/api/search?${params.toString()}`,
-      )
-      setItems(response.items)
-      setError('')
-    } catch {
-      setError('검색하지 못했습니다.')
-    }
-  }
+    const q = query.trim().toLowerCase()
+    return sortItemsOldestFirst(
+      byCategory.filter((item) => {
+        const detail = item.detail ?? {}
+        return [
+          item.body ?? '',
+          asText(detail.text),
+          asText(detail.title),
+          asText(detail.url),
+          asText(detail.memo),
+          asText(detail.body),
+          asText(detail.name),
+        ]
+          .join(' ')
+          .toLowerCase()
+          .includes(q)
+      }),
+    )
+  }, [allItems, activeCategory, query])
 
   return (
     <main className="screen plain-screen">
-      <form className="search-box" onSubmit={runSearch}>
+      <div className="search-box">
         <input
           aria-label="검색어"
           autoFocus
@@ -693,27 +1232,27 @@ function SearchScreen() {
           placeholder="검색"
           value={query}
         />
-      </form>
+      </div>
 
-      <div className="filter-row" aria-label="타입 필터">
-        {searchTypes.map((entry) => (
+      <div className="filter-row no-scrollbar" aria-label="카테고리 필터">
+        {categoryLabels.map((category) => (
           <button
-            className={entry.type === type ? 'selected' : ''}
-            key={entry.type}
-            onClick={() => setType(entry.type)}
+            className={category === activeCategory ? 'selected' : ''}
+            key={category}
+            onClick={() => setActiveCategory(category)}
             type="button"
           >
-            {entry.label}
+            {category}
           </button>
         ))}
       </div>
 
-      {error && <p className="form-error">{error}</p>}
-
       <section className="search-results" aria-label="검색 결과">
-        {items.map((item) => (
-          <MessageBubble item={item} key={item.id} />
-        ))}
+        {filteredItems.length ? (
+          filteredItems.map((item) => <MessageBubble item={item} key={item.id} onOpenList={onOpenList} />)
+        ) : (
+          <div className="empty-thread">검색 결과가 없습니다.</div>
+        )}
       </section>
     </main>
   )
@@ -1345,6 +1884,7 @@ function App() {
   const [loadError, setLoadError] = useState('')
   const [settings, setSettings] = useState<SettingsResponse | null>(null)
   const [user, setUser] = useState<AuthUser | null>(null)
+  const [activeList, setActiveList] = useState<InboxItem | null>(null)
 
   async function refreshAuth() {
     try {
@@ -1396,6 +1936,15 @@ function App() {
     await refreshInbox()
   }
 
+  async function toggleComplete(id: number) {
+    try {
+      await apiFetch(`/api/items/todos/${id}/complete`, { method: 'PATCH' })
+      await refreshInbox()
+    } catch {
+      setLoadError('완료 상태를 변경하지 못했습니다.')
+    }
+  }
+
   useEffect(() => {
     void Promise.resolve().then(refreshAuth)
   }, [])
@@ -1434,8 +1983,19 @@ function App() {
       <div className="phone-shell">
         {loadError && <div className="offline-banner">{loadError}</div>}
 
-        {activeNav === 'search' ? (
-          <SearchScreen />
+        {activeList ? (
+          <ListDetailScreen
+            item={activeList}
+            onBack={() => setActiveList(null)}
+            onUpdated={(updated) => {
+              setActiveList(updated)
+              setItems((current) =>
+                current.map((i) => (i.id === updated.id ? updated : i)),
+              )
+            }}
+          />
+        ) : activeNav === 'search' ? (
+          <SearchScreen allItems={items} onOpenList={setActiveList} />
         ) : activeNav === 'settings' ? (
           <SettingsScreen
             onDeleted={handleDeleted}
@@ -1453,14 +2013,25 @@ function App() {
             alerts={alerts}
             items={items}
             onCreated={(item) => {
-              setItems((current) => [item, ...current])
+              setItems((current) => [...current, item])
               void refreshInbox()
             }}
-            onSearch={() => setActiveNav('search')}
+            onOpenList={setActiveList}
+            onToggleComplete={(id) => {
+              void toggleComplete(id)
+            }}
           />
         )}
 
-        <BottomNav activeNav={activeNav} onChange={setActiveNav} />
+        {!activeList && (
+          <BottomNav
+            activeNav={activeNav}
+            onChange={(nav) => {
+              setActiveList(null)
+              setActiveNav(nav)
+            }}
+          />
+        )}
       </div>
     </div>
   )

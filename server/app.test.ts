@@ -111,6 +111,77 @@ test('creates and lists note items', async () => {
   await closeTestApp(app, db)
 })
 
+test('toggles todo completion via the complete endpoint', async () => {
+  const db = testDb()
+  const app = createApp({ db })
+  const cookie = await authCookie(app)
+
+  const createResponse = await app.inject({
+    method: 'POST',
+    url: '/api/items/todos',
+    headers: { cookie },
+    payload: { title: 'finish report', dueAt: '2026-06-10T00:00:00.000Z' },
+  })
+  assert.equal(createResponse.statusCode, 201)
+  const todoId = createResponse.json().item.id
+
+  const completeResponse = await app.inject({
+    method: 'PATCH',
+    url: `/api/items/todos/${todoId}/complete`,
+    headers: { cookie },
+  })
+  assert.equal(completeResponse.statusCode, 200)
+  assert.notEqual(completeResponse.json().item.detail.completedAt, null)
+
+  const undoResponse = await app.inject({
+    method: 'PATCH',
+    url: `/api/items/todos/${todoId}/complete`,
+    headers: { cookie },
+  })
+  assert.equal(undoResponse.statusCode, 200)
+  assert.equal(undoResponse.json().item.detail.completedAt, null)
+
+  const missingResponse = await app.inject({
+    method: 'PATCH',
+    url: '/api/items/todos/9999/complete',
+    headers: { cookie },
+  })
+  assert.equal(missingResponse.statusCode, 404)
+
+  await closeTestApp(app, db)
+})
+
+test('lists inbox items oldest to newest', async () => {
+  const db = testDb()
+  const app = createApp({ db })
+  const cookie = await authCookie(app)
+
+  await app.inject({
+    method: 'POST',
+    url: '/api/items/notes',
+    headers: { cookie },
+    payload: { body: 'oldest note' },
+  })
+  await app.inject({
+    method: 'POST',
+    url: '/api/items/notes',
+    headers: { cookie },
+    payload: { body: 'newest note' },
+  })
+  const response = await app.inject({
+    url: '/api/items',
+    headers: { cookie },
+  })
+  const payload = response.json()
+
+  assert.deepEqual(
+    payload.items.map((item: { detail: { text: string } }) => item.detail.text),
+    ['oldest note', 'newest note'],
+  )
+
+  await closeTestApp(app, db)
+})
+
 test('searches notes and links without requiring external services', async () => {
   const db = testDb()
   const app = createApp({ db })
@@ -138,6 +209,43 @@ test('searches notes and links without requiring external services', async () =>
   assert.equal(response.statusCode, 200)
   assert.equal(payload.items.length, 1)
   assert.equal(payload.items[0].type, 'link')
+  await closeTestApp(app, db)
+})
+
+test('normalizes common link URLs before saving', async () => {
+  const db = testDb()
+  const app = createApp({ db })
+  const cookie = await authCookie(app)
+
+  const response = await app.inject({
+    method: 'POST',
+    url: '/api/items/links',
+    headers: { cookie },
+    payload: { url: 'WWW.NAVER.COM', title: 'Naver' },
+  })
+  const payload = response.json()
+
+  assert.equal(response.statusCode, 201)
+  assert.equal(payload.item.detail.url, 'https://www.naver.com')
+
+  await closeTestApp(app, db)
+})
+
+test('rejects clearly invalid link URLs', async () => {
+  const db = testDb()
+  const app = createApp({ db })
+  const cookie = await authCookie(app)
+
+  const response = await app.inject({
+    method: 'POST',
+    url: '/api/items/links',
+    headers: { cookie },
+    payload: { url: 'not a url', title: 'Invalid' },
+  })
+
+  assert.equal(response.statusCode, 400)
+  assert.equal(tableCount(db, 'links'), 0)
+
   await closeTestApp(app, db)
 })
 
