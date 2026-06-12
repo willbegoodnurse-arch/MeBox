@@ -247,9 +247,11 @@ function AuthScreen({
 
 function MessageBubble({
   item,
+  onOpenList,
   onToggleComplete,
 }: {
   item: InboxItem
+  onOpenList?: (item: InboxItem) => void
   onToggleComplete?: (id: number) => void
 }) {
   const detail = item.detail ?? {}
@@ -309,7 +311,12 @@ function MessageBubble({
       )}
 
       {item.type === 'list' && (
-        <div className="message-stack">
+        <div
+          className="message-stack"
+          onClick={onOpenList ? () => onOpenList(item) : undefined}
+          role={onOpenList ? 'button' : undefined}
+          style={onOpenList ? { cursor: 'pointer' } : undefined}
+        >
           <strong>{asText(detail.title)}</strong>
           <ul className="mini-list">
             {(Array.isArray(detail.items) ? detail.items : []).slice(0, 4).map((row) => {
@@ -363,9 +370,11 @@ function MessageBubble({
 
 function Timeline({
   items,
+  onOpenList,
   onToggleComplete,
 }: {
   items: InboxItem[]
+  onOpenList?: (item: InboxItem) => void
   onToggleComplete?: (id: number) => void
 }) {
   if (!items.length) {
@@ -378,7 +387,7 @@ function Timeline({
         <div className="day-group" key={group.title}>
           <div className="day-divider">{group.title}</div>
           {group.items.map((item) => (
-            <MessageBubble item={item} key={item.id} onToggleComplete={onToggleComplete} />
+            <MessageBubble item={item} key={item.id} onOpenList={onOpenList} onToggleComplete={onToggleComplete} />
           ))}
         </div>
       ))}
@@ -708,6 +717,101 @@ function ReminderSheet({
   )
 }
 
+function ListSheet({
+  initialTitle,
+  onCancel,
+  onSaved,
+}: {
+  initialTitle: string
+  onCancel: () => void
+  onSaved: (item: InboxItem) => void
+}) {
+  const [visible, setVisible] = useState(false)
+  const [title, setTitle] = useState(initialTitle)
+  const [itemsText, setItemsText] = useState('')
+  const [error, setError] = useState('')
+  const [saving, setSaving] = useState(false)
+
+  useEffect(() => {
+    const frame = window.requestAnimationFrame(() => setVisible(true))
+    return () => window.cancelAnimationFrame(frame)
+  }, [])
+
+  const canSave = title.trim().length > 0 && !saving
+
+  function close(after: () => void) {
+    setVisible(false)
+    window.setTimeout(after, 280)
+  }
+
+  async function save() {
+    if (!title.trim()) return
+    setSaving(true)
+    setError('')
+
+    const items = itemsText
+      .split('\n')
+      .map((text) => text.trim())
+      .filter(Boolean)
+      .map((text) => ({ text }))
+
+    try {
+      const response = await apiFetch<{ item: InboxItem }>('/api/items/lists', {
+        method: 'POST',
+        body: JSON.stringify({ title: title.trim(), items: items.length ? items : [{ text: title.trim() }] }),
+      })
+      close(() => onSaved(response.item))
+    } catch {
+      setError('저장하지 못했습니다.')
+      setSaving(false)
+    }
+  }
+
+  return (
+    <div className="list-sheet-overlay" role="dialog" aria-modal="true" aria-label="New List">
+      <div className={`list-sheet ${visible ? 'open' : ''}`}>
+        <header className="reminder-sheet-header">
+          <button className="sheet-cancel-btn" onClick={() => close(onCancel)} type="button">
+            Cancel
+          </button>
+          <h2>New List</h2>
+          <button className="sheet-save-btn" disabled={!canSave} onClick={save} type="button">
+            Save
+          </button>
+        </header>
+
+        <div className="reminder-sheet-body">
+          <section className="reminder-section">
+            <span className="reminder-section-label">Title</span>
+            <input
+              autoFocus
+              aria-label="리스트 이름"
+              className="reminder-input"
+              onChange={(event) => setTitle(event.target.value)}
+              placeholder="리스트 이름"
+              value={title}
+            />
+          </section>
+
+          <section className="reminder-section">
+            <span className="reminder-section-label">Items</span>
+            <textarea
+              aria-label="리스트 항목"
+              className="reminder-input"
+              onChange={(event) => setItemsText(event.target.value)}
+              placeholder="항목을 줄마다 입력"
+              rows={5}
+              value={itemsText}
+            />
+          </section>
+
+          {error && <p className="sheet-error">{error}</p>}
+        </div>
+      </div>
+    </div>
+  )
+}
+
 function Composer({
   onCreated,
 }: {
@@ -722,17 +826,11 @@ function Composer({
   const [selectedFile, setSelectedFile] = useState<File | null>(null)
   const [isSending, setIsSending] = useState(false)
   const [reminderSheetOpen, setReminderSheetOpen] = useState(false)
+  const [listSheetOpen, setListSheetOpen] = useState(false)
   const [error, setError] = useState('')
 
   const isNote = createType === 'note'
-  const isReminder = createType === 'todo'
-  const placeholder = isNote
-    ? '나에게 입력...'
-    : createType === 'list'
-      ? '리스트 제목 입력...'
-      : isReminder
-        ? 'Reminder 제목 입력...'
-        : `${typeLabel(createType)} 입력...`
+  const placeholder = isNote ? '나에게 입력...' : `${typeLabel(createType)} 입력...`
   const canSend = createType === 'file' ? selectedFile !== null : draft.trim().length > 0
 
   function resetComposer() {
@@ -746,11 +844,6 @@ function Composer({
 
   async function submit(event: FormEvent) {
     event.preventDefault()
-
-    if (isReminder) {
-      setReminderSheetOpen(true)
-      return
-    }
 
     setIsSending(true)
     setError('')
@@ -779,16 +872,6 @@ function Composer({
 
         path = '/api/items/links'
         payload = { url: normalizedUrl, title: extra || undefined }
-      } else if (createType === 'list') {
-        path = '/api/items/lists'
-        payload = {
-          title: draft,
-          items: extra
-            .split('\n')
-            .map((text) => text.trim())
-            .filter(Boolean)
-            .map((text) => ({ text })),
-        }
       } else if (createType === 'announcement') {
         path = '/api/items/announcements'
         payload = { title: extra || undefined, body: draft, pinned: true }
@@ -826,9 +909,15 @@ function Composer({
               className={entry.type === createType ? 'selected' : ''}
               key={entry.type}
               onClick={() => {
-                setCreateType(entry.type)
                 setMenuOpen(false)
                 setError('')
+                if (entry.type === 'todo') {
+                  setReminderSheetOpen(true)
+                } else if (entry.type === 'list') {
+                  setListSheetOpen(true)
+                } else {
+                  setCreateType(entry.type)
+                }
               }}
               type="button"
             >
@@ -838,7 +927,7 @@ function Composer({
         </div>
       )}
 
-      {!isNote && !isReminder && (
+      {!isNote && (
         <div className="detail-tray">
           <span>{typeLabel(createType)}</span>
           {createType === 'file' ? (
@@ -847,14 +936,6 @@ function Composer({
               aria-label="파일 선택"
               onChange={(event) => setSelectedFile(event.target.files?.[0] ?? null)}
               type="file"
-            />
-          ) : createType === 'list' ? (
-            <textarea
-              aria-label="리스트 항목"
-              onChange={(event) => setExtra(event.target.value)}
-              placeholder="항목을 줄마다 입력"
-              rows={2}
-              value={extra}
             />
           ) : createType === 'recurring_expense' ? (
             <div className="split-fields">
@@ -910,22 +991,12 @@ function Composer({
           placeholder={createType === 'file' ? selectedFile?.name ?? '파일 선택' : placeholder}
           value={createType === 'file' ? selectedFile?.name ?? '' : draft}
         />
-        {isReminder ? (
-          <button
-            className="send-button"
-            onClick={() => setReminderSheetOpen(true)}
-            type="button"
-          >
-            Add Reminder
-          </button>
-        ) : (
-          <button className="send-button" disabled={isSending || !canSend} type="submit">
-            보내기
-          </button>
-        )}
+        <button className="send-button" disabled={isSending || !canSend} type="submit">
+          보내기
+        </button>
       </div>
     </form>
-      {reminderSheetOpen && isReminder && (
+      {reminderSheetOpen && (
         <ReminderSheet
           initialTitle={draft}
           onCancel={() => {
@@ -939,7 +1010,118 @@ function Composer({
           }}
         />
       )}
+      {listSheetOpen && (
+        <ListSheet
+          initialTitle={draft}
+          onCancel={() => {
+            setListSheetOpen(false)
+            resetComposer()
+          }}
+          onSaved={(item) => {
+            setListSheetOpen(false)
+            onCreated(item)
+            resetComposer()
+          }}
+        />
+      )}
     </>
+  )
+}
+
+function ListDetailScreen({
+  item,
+  onBack,
+  onUpdated,
+}: {
+  item: InboxItem
+  onBack: () => void
+  onUpdated: (item: InboxItem) => void
+}) {
+  const [newText, setNewText] = useState('')
+  const [adding, setAdding] = useState(false)
+
+  const detail = item.detail ?? {}
+  const listItems = (Array.isArray(detail.items) ? detail.items : []) as Array<
+    Record<string, unknown>
+  >
+  const total = listItems.length
+  const done = listItems.filter((row) => Boolean(row.completedAt)).length
+
+  async function addItem(event: FormEvent) {
+    event.preventDefault()
+    if (!newText.trim() || adding) return
+    setAdding(true)
+    try {
+      const response = await apiFetch<{ item: InboxItem }>(
+        `/api/items/lists/${item.id}/items`,
+        { method: 'POST', body: JSON.stringify({ text: newText.trim() }) },
+      )
+      onUpdated(response.item)
+      setNewText('')
+    } catch {
+      /* silent */
+    } finally {
+      setAdding(false)
+    }
+  }
+
+  async function toggleItem(listItemId: number) {
+    try {
+      const response = await apiFetch<{ item: InboxItem }>(
+        `/api/items/lists/${item.id}/items/${listItemId}/complete`,
+        { method: 'PATCH' },
+      )
+      onUpdated(response.item)
+    } catch {
+      /* silent */
+    }
+  }
+
+  return (
+    <main className="screen list-detail-screen">
+      <header className="list-detail-header">
+        <button className="text-button" onClick={onBack} type="button">
+          뒤로
+        </button>
+        <div>
+          <h1>{asText(detail.title)}</h1>
+          <span className="list-detail-count">
+            {done}/{total}
+          </span>
+        </div>
+      </header>
+
+      <div className="list-items-scroll">
+        {listItems.map((row) => (
+          <div className="list-item-row" key={String(row.id)}>
+            <button
+              aria-label={row.completedAt ? '완료 취소' : '완료'}
+              aria-pressed={Boolean(row.completedAt)}
+              className="list-item-check"
+              onClick={() => toggleItem(Number(row.id))}
+              type="button"
+            >
+              {row.completedAt ? '✓' : ''}
+            </button>
+            <span className={`list-item-text ${row.completedAt ? 'done' : ''}`}>
+              {asText(row.text)}
+            </span>
+          </div>
+        ))}
+      </div>
+
+      <form className="list-add-bar" onSubmit={addItem}>
+        <input
+          aria-label="새 항목"
+          onChange={(event) => setNewText(event.target.value)}
+          placeholder="항목 추가..."
+          value={newText}
+        />
+        <button className="list-add-btn" disabled={adding || !newText.trim()} type="submit">
+          추가
+        </button>
+      </form>
+    </main>
   )
 }
 
@@ -947,11 +1129,13 @@ function InboxScreen({
   alerts,
   items,
   onCreated,
+  onOpenList,
   onToggleComplete,
 }: {
   alerts: AlertItem[]
   items: InboxItem[]
   onCreated: (item: InboxItem) => void
+  onOpenList: (item: InboxItem) => void
   onToggleComplete: (id: number) => void
 }) {
   const timelineRef = useRef<HTMLDivElement | null>(null)
@@ -970,7 +1154,7 @@ function InboxScreen({
         <InboxHeader alerts={alerts} />
         <AlertStrip alerts={alerts} />
         <div className="timeline-scroll" ref={timelineRef}>
-          <Timeline items={visibleItems} onToggleComplete={onToggleComplete} />
+          <Timeline items={visibleItems} onOpenList={onOpenList} onToggleComplete={onToggleComplete} />
         </div>
       </main>
       <Composer onCreated={onCreated} />
@@ -978,7 +1162,7 @@ function InboxScreen({
   )
 }
 
-function SearchScreen({ allItems }: { allItems: InboxItem[] }) {
+function SearchScreen({ allItems, onOpenList }: { allItems: InboxItem[]; onOpenList: (item: InboxItem) => void }) {
   const [query, setQuery] = useState('')
   const [activeCategory, setActiveCategory] = useState<CategoryLabel>('All')
 
@@ -1035,7 +1219,7 @@ function SearchScreen({ allItems }: { allItems: InboxItem[] }) {
 
       <section className="search-results" aria-label="검색 결과">
         {filteredItems.length ? (
-          filteredItems.map((item) => <MessageBubble item={item} key={item.id} />)
+          filteredItems.map((item) => <MessageBubble item={item} key={item.id} onOpenList={onOpenList} />)
         ) : (
           <div className="empty-thread">검색 결과가 없습니다.</div>
         )}
@@ -1670,6 +1854,7 @@ function App() {
   const [loadError, setLoadError] = useState('')
   const [settings, setSettings] = useState<SettingsResponse | null>(null)
   const [user, setUser] = useState<AuthUser | null>(null)
+  const [activeList, setActiveList] = useState<InboxItem | null>(null)
 
   async function refreshAuth() {
     try {
@@ -1768,8 +1953,19 @@ function App() {
       <div className="phone-shell">
         {loadError && <div className="offline-banner">{loadError}</div>}
 
-        {activeNav === 'search' ? (
-          <SearchScreen allItems={items} />
+        {activeList ? (
+          <ListDetailScreen
+            item={activeList}
+            onBack={() => setActiveList(null)}
+            onUpdated={(updated) => {
+              setActiveList(updated)
+              setItems((current) =>
+                current.map((i) => (i.id === updated.id ? updated : i)),
+              )
+            }}
+          />
+        ) : activeNav === 'search' ? (
+          <SearchScreen allItems={items} onOpenList={setActiveList} />
         ) : activeNav === 'settings' ? (
           <SettingsScreen
             onDeleted={handleDeleted}
@@ -1790,13 +1986,22 @@ function App() {
               setItems((current) => [...current, item])
               void refreshInbox()
             }}
+            onOpenList={setActiveList}
             onToggleComplete={(id) => {
               void toggleComplete(id)
             }}
           />
         )}
 
-        <BottomNav activeNav={activeNav} onChange={setActiveNav} />
+        {!activeList && (
+          <BottomNav
+            activeNav={activeNav}
+            onChange={(nav) => {
+              setActiveList(null)
+              setActiveNav(nav)
+            }}
+          />
+        )}
       </div>
     </div>
   )
