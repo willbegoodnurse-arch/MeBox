@@ -97,6 +97,10 @@ export const recurringExpenseInputSchema = z.object({
   reminderDaysBefore: z.number().int().min(0).max(31).default(3),
 })
 
+export const itemRenameSchema = z.object({
+  name: z.string().trim().min(1).max(300),
+})
+
 export const searchQuerySchema = z.object({
   q: z.string().trim().min(1).max(200),
   type: z.string().trim().optional(),

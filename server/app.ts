@@ -33,6 +33,7 @@ import {
   MAX_UPLOAD_BYTES,
   UploadValidationError,
   allowedMimeTypes,
+  deleteStoredFile,
   listFileRows,
   openStoredFile,
   storeUpload,
@@ -45,6 +46,7 @@ import {
   deleteAccountInputSchema,
   exportInputSchema,
   importInputSchema,
+  itemRenameSchema,
   loginInputSchema,
   linkInputSchema,
   listInputSchema,
@@ -592,6 +594,79 @@ export function createApp({ db, uploadDir = 'uploads' }: AppOptions) {
       `attachment; filename*=UTF-8''${encodeURIComponent(row.original_name)}`,
     )
     return reply.send(stream)
+  })
+
+  app.patch('/api/items/:id', async (request, reply) => {
+    const id = Number((request.params as { id: string }).id)
+    if (!Number.isInteger(id) || id <= 0) {
+      reply.code(404)
+      return { error: 'Item not found' }
+    }
+
+    const item = getItem(db, id)
+    if (!item) {
+      reply.code(404)
+      return { error: 'Item not found' }
+    }
+
+    if (item.type === 'file') {
+      reply.code(422)
+      return { error: 'File rename not supported' }
+    }
+
+    const input = parseBody(itemRenameSchema, request.body)
+    const now = new Date().toISOString()
+
+    db.transaction(() => {
+      switch (item.type) {
+        case 'note':
+          db.prepare('UPDATE items SET body = ?, updated_at = ? WHERE id = ?').run(input.name, now, id)
+          break
+        case 'link':
+          db.prepare('UPDATE links SET title = ? WHERE item_id = ?').run(input.name, id)
+          db.prepare('UPDATE items SET updated_at = ? WHERE id = ?').run(now, id)
+          break
+        case 'todo':
+          db.prepare('UPDATE todos SET title = ? WHERE item_id = ?').run(input.name, id)
+          db.prepare('UPDATE items SET body = ?, updated_at = ? WHERE id = ?').run(input.name, now, id)
+          break
+        case 'list':
+          db.prepare('UPDATE lists SET title = ? WHERE item_id = ?').run(input.name, id)
+          db.prepare('UPDATE items SET body = ?, updated_at = ? WHERE id = ?').run(input.name, now, id)
+          break
+        case 'announcement':
+          db.prepare('UPDATE announcements SET title = ? WHERE item_id = ?').run(input.name, id)
+          db.prepare('UPDATE items SET updated_at = ? WHERE id = ?').run(now, id)
+          break
+        case 'recurring_expense':
+          db.prepare('UPDATE recurring_expenses SET name = ? WHERE item_id = ?').run(input.name, id)
+          db.prepare('UPDATE items SET body = ?, updated_at = ? WHERE id = ?').run(input.name, now, id)
+          break
+      }
+    })()
+
+    return { item: getItem(db, id) }
+  })
+
+  app.delete('/api/items/:id', async (request, reply) => {
+    const id = Number((request.params as { id: string }).id)
+    if (!Number.isInteger(id) || id <= 0) {
+      reply.code(404)
+      return { error: 'Item not found' }
+    }
+
+    const row = db.prepare('SELECT type FROM items WHERE id = ?').get(id) as { type: string } | undefined
+    if (!row) {
+      reply.code(404)
+      return { error: 'Item not found' }
+    }
+
+    if (row.type === 'file') {
+      deleteStoredFile(db, uploadDir, id)
+    }
+
+    db.prepare('DELETE FROM items WHERE id = ?').run(id)
+    return { ok: true }
   })
 
   app.get('/api/search', async (request) => {
