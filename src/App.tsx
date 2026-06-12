@@ -144,6 +144,19 @@ function typeLabel(type: ItemType) {
   return categoryForItemType(type)
 }
 
+function getItemName(item: InboxItem) {
+  const d = item.detail ?? {}
+  switch (item.type) {
+    case 'note': return asText(d.text)
+    case 'link': return asText(d.title) || asText(d.url)
+    case 'todo': return asText(d.title)
+    case 'list': return asText(d.title)
+    case 'announcement': return asText(d.title)
+    case 'recurring_expense': return asText(d.name)
+    default: return ''
+  }
+}
+
 function groupItems(items: InboxItem[]) {
   const groups: { title: string; items: InboxItem[] }[] = []
 
@@ -247,17 +260,40 @@ function AuthScreen({
 
 function MessageBubble({
   item,
+  onLongPress,
   onOpenList,
   onToggleComplete,
 }: {
   item: InboxItem
+  onLongPress?: (item: InboxItem) => void
   onOpenList?: (item: InboxItem) => void
   onToggleComplete?: (id: number) => void
 }) {
   const detail = item.detail ?? {}
+  const longPressTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
+
+  function startLongPress() {
+    longPressTimer.current = window.setTimeout(() => {
+      longPressTimer.current = null
+      onLongPress?.(item)
+    }, 500)
+  }
+
+  function cancelLongPress() {
+    if (longPressTimer.current !== null) {
+      clearTimeout(longPressTimer.current)
+      longPressTimer.current = null
+    }
+  }
 
   return (
-    <article className={`message-bubble message-${item.type}`}>
+    <article
+      className={`message-bubble message-${item.type}`}
+      onContextMenu={onLongPress ? (e) => { e.preventDefault(); onLongPress(item) } : undefined}
+      onTouchEnd={onLongPress ? cancelLongPress : undefined}
+      onTouchMove={onLongPress ? cancelLongPress : undefined}
+      onTouchStart={onLongPress ? startLongPress : undefined}
+    >
       <div className="message-label">
         <span className="category-badge">{typeLabel(item.type)}</span>
         <time>{formatMessageTime(item.createdAt)}</time>
@@ -370,10 +406,12 @@ function MessageBubble({
 
 function Timeline({
   items,
+  onLongPress,
   onOpenList,
   onToggleComplete,
 }: {
   items: InboxItem[]
+  onLongPress?: (item: InboxItem) => void
   onOpenList?: (item: InboxItem) => void
   onToggleComplete?: (id: number) => void
 }) {
@@ -387,11 +425,111 @@ function Timeline({
         <div className="day-group" key={group.title}>
           <div className="day-divider">{group.title}</div>
           {group.items.map((item) => (
-            <MessageBubble item={item} key={item.id} onOpenList={onOpenList} onToggleComplete={onToggleComplete} />
+            <MessageBubble item={item} key={item.id} onLongPress={onLongPress} onOpenList={onOpenList} onToggleComplete={onToggleComplete} />
           ))}
         </div>
       ))}
     </section>
+  )
+}
+
+function ContextMenu({
+  item,
+  onCancel,
+  onDelete,
+  onRename,
+}: {
+  item: InboxItem
+  onCancel: () => void
+  onDelete: () => void
+  onRename: () => void
+}) {
+  return (
+    <div className="context-menu-overlay" onClick={onCancel} role="dialog" aria-modal="true" aria-label="아이템 메뉴">
+      <div className="context-menu" onClick={(e) => e.stopPropagation()}>
+        <p className="context-menu-title">{typeLabel(item.type)}</p>
+        {item.type === 'file' ? (
+          <button className="context-menu-btn" disabled type="button">
+            파일명 변경 불가
+          </button>
+        ) : (
+          <button className="context-menu-btn" onClick={onRename} type="button">
+            Rename
+          </button>
+        )}
+        <button className="context-menu-btn danger" onClick={onDelete} type="button">
+          Delete
+        </button>
+        <button className="context-menu-btn cancel" onClick={onCancel} type="button">
+          Cancel
+        </button>
+      </div>
+    </div>
+  )
+}
+
+function RenamePopup({
+  item,
+  onCancel,
+  onSaved,
+}: {
+  item: InboxItem
+  onCancel: () => void
+  onSaved: (updated: InboxItem) => void
+}) {
+  const [value, setValue] = useState(() => getItemName(item))
+  const [saving, setSaving] = useState(false)
+  const [error, setError] = useState('')
+
+  const canSave = value.trim().length > 0 && !saving
+
+  async function save() {
+    if (!value.trim()) return
+    setSaving(true)
+    setError('')
+    try {
+      const response = await apiFetch<{ item: InboxItem }>(`/api/items/${item.id}`, {
+        method: 'PATCH',
+        body: JSON.stringify({ name: value.trim() }),
+      })
+      onSaved(response.item)
+    } catch {
+      setError('저장하지 못했습니다.')
+      setSaving(false)
+    }
+  }
+
+  return (
+    <div className="rename-popup" role="dialog" aria-modal="true" aria-label="Rename">
+      <div className="rename-box">
+        <h3>Rename</h3>
+        <input
+          autoFocus
+          aria-label="새 이름"
+          onChange={(e) => setValue(e.target.value)}
+          onKeyDown={(e) => { if (e.key === 'Enter') void save() }}
+          value={value}
+        />
+        {error && <p className="form-error">{error}</p>}
+        <div className="rename-actions">
+          <button
+            onClick={onCancel}
+            style={{ background: 'var(--panel-raised)', color: 'var(--text-soft)' }}
+            type="button"
+          >
+            Cancel
+          </button>
+          <button
+            disabled={!canSave}
+            onClick={() => void save()}
+            style={{ background: 'var(--accent)', color: '#fff' }}
+            type="button"
+          >
+            Save
+          </button>
+        </div>
+      </div>
+    </div>
   )
 }
 
@@ -1129,12 +1267,14 @@ function InboxScreen({
   alerts,
   items,
   onCreated,
+  onLongPress,
   onOpenList,
   onToggleComplete,
 }: {
   alerts: AlertItem[]
   items: InboxItem[]
   onCreated: (item: InboxItem) => void
+  onLongPress: (item: InboxItem) => void
   onOpenList: (item: InboxItem) => void
   onToggleComplete: (id: number) => void
 }) {
@@ -1154,7 +1294,7 @@ function InboxScreen({
         <InboxHeader alerts={alerts} />
         <AlertStrip alerts={alerts} />
         <div className="timeline-scroll" ref={timelineRef}>
-          <Timeline items={visibleItems} onOpenList={onOpenList} onToggleComplete={onToggleComplete} />
+          <Timeline items={visibleItems} onLongPress={onLongPress} onOpenList={onOpenList} onToggleComplete={onToggleComplete} />
         </div>
       </main>
       <Composer onCreated={onCreated} />
@@ -1162,7 +1302,7 @@ function InboxScreen({
   )
 }
 
-function SearchScreen({ allItems, onOpenList }: { allItems: InboxItem[]; onOpenList: (item: InboxItem) => void }) {
+function SearchScreen({ allItems, onLongPress, onOpenList }: { allItems: InboxItem[]; onLongPress: (item: InboxItem) => void; onOpenList: (item: InboxItem) => void }) {
   const [query, setQuery] = useState('')
   const [activeCategory, setActiveCategory] = useState<CategoryLabel>('All')
 
@@ -1219,7 +1359,7 @@ function SearchScreen({ allItems, onOpenList }: { allItems: InboxItem[]; onOpenL
 
       <section className="search-results" aria-label="검색 결과">
         {filteredItems.length ? (
-          filteredItems.map((item) => <MessageBubble item={item} key={item.id} onOpenList={onOpenList} />)
+          filteredItems.map((item) => <MessageBubble item={item} key={item.id} onLongPress={onLongPress} onOpenList={onOpenList} />)
         ) : (
           <div className="empty-thread">검색 결과가 없습니다.</div>
         )}
@@ -1855,6 +1995,8 @@ function App() {
   const [settings, setSettings] = useState<SettingsResponse | null>(null)
   const [user, setUser] = useState<AuthUser | null>(null)
   const [activeList, setActiveList] = useState<InboxItem | null>(null)
+  const [contextItem, setContextItem] = useState<InboxItem | null>(null)
+  const [renameItem, setRenameItem] = useState<InboxItem | null>(null)
 
   async function refreshAuth() {
     try {
@@ -1904,6 +2046,22 @@ function App() {
 
   async function handleImported() {
     await refreshInbox()
+  }
+
+  async function deleteItem(id: number) {
+    try {
+      await apiFetch(`/api/items/${id}`, { method: 'DELETE' })
+      setContextItem(null)
+      void refreshInbox()
+    } catch {
+      setContextItem(null)
+    }
+  }
+
+  function handleRenamed(updated: InboxItem) {
+    setRenameItem(null)
+    setItems((prev) => prev.map((i) => (i.id === updated.id ? updated : i)))
+    if (activeList?.id === updated.id) setActiveList(updated)
   }
 
   async function toggleComplete(id: number) {
@@ -1965,7 +2123,7 @@ function App() {
             }}
           />
         ) : activeNav === 'search' ? (
-          <SearchScreen allItems={items} onOpenList={setActiveList} />
+          <SearchScreen allItems={items} onLongPress={setContextItem} onOpenList={setActiveList} />
         ) : activeNav === 'settings' ? (
           <SettingsScreen
             onDeleted={handleDeleted}
@@ -1986,6 +2144,7 @@ function App() {
               setItems((current) => [...current, item])
               void refreshInbox()
             }}
+            onLongPress={setContextItem}
             onOpenList={setActiveList}
             onToggleComplete={(id) => {
               void toggleComplete(id)
@@ -2000,6 +2159,25 @@ function App() {
               setActiveList(null)
               setActiveNav(nav)
             }}
+          />
+        )}
+
+        {contextItem && (
+          <ContextMenu
+            item={contextItem}
+            onCancel={() => setContextItem(null)}
+            onDelete={() => void deleteItem(contextItem.id)}
+            onRename={() => {
+              setRenameItem(contextItem)
+              setContextItem(null)
+            }}
+          />
+        )}
+        {renameItem && (
+          <RenamePopup
+            item={renameItem}
+            onCancel={() => setRenameItem(null)}
+            onSaved={handleRenamed}
           />
         )}
       </div>

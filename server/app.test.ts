@@ -1360,6 +1360,103 @@ test('delete account invalidates old session, blocks old login, and reopens setu
   await closeTestApp(app, db)
 })
 
+test('rename endpoint updates the primary field for each item type', async () => {
+  const db = testDb()
+  const app = createApp({ db })
+  const cookie = await authCookie(app)
+
+  const note = await app.inject({
+    method: 'POST', url: '/api/items/notes', headers: { cookie }, payload: { body: 'original' },
+  })
+  const noteId = note.json().item.id
+
+  const renameNote = await app.inject({
+    method: 'PATCH', url: `/api/items/${noteId}`, headers: { cookie }, payload: { name: 'renamed' },
+  })
+  assert.equal(renameNote.statusCode, 200)
+  assert.equal(renameNote.json().item.detail.text, 'renamed')
+
+  const todo = await app.inject({
+    method: 'POST', url: '/api/items/todos', headers: { cookie },
+    payload: { title: 'buy milk', dueAt: '2026-06-10T00:00:00.000Z' },
+  })
+  const todoId = todo.json().item.id
+
+  const renameTodo = await app.inject({
+    method: 'PATCH', url: `/api/items/${todoId}`, headers: { cookie }, payload: { name: 'buy bread' },
+  })
+  assert.equal(renameTodo.statusCode, 200)
+  assert.equal(renameTodo.json().item.detail.title, 'buy bread')
+
+  const missing = await app.inject({
+    method: 'PATCH', url: '/api/items/9999', headers: { cookie }, payload: { name: 'x' },
+  })
+  assert.equal(missing.statusCode, 404)
+
+  await closeTestApp(app, db)
+})
+
+test('rename endpoint returns 422 for file items', async () => {
+  const db = testDb()
+  const uploadDir = testUploadDir()
+  const app = createApp({ db, uploadDir })
+  const cookie = await authCookie(app)
+
+  const upload = await app.inject(uploadRequest({ filename: 'test.txt', mimeType: 'text/plain', cookie }))
+  const fileId = upload.json().item.id
+
+  const response = await app.inject({
+    method: 'PATCH', url: `/api/items/${fileId}`, headers: { cookie }, payload: { name: 'new.txt' },
+  })
+  assert.equal(response.statusCode, 422)
+
+  rmSync(uploadDir, { recursive: true, force: true })
+  await closeTestApp(app, db)
+})
+
+test('delete endpoint removes item and returns ok', async () => {
+  const db = testDb()
+  const app = createApp({ db })
+  const cookie = await authCookie(app)
+
+  const create = await app.inject({
+    method: 'POST', url: '/api/items/notes', headers: { cookie }, payload: { body: 'to delete' },
+  })
+  const id = create.json().item.id
+
+  const del = await app.inject({ method: 'DELETE', url: `/api/items/${id}`, headers: { cookie } })
+  assert.equal(del.statusCode, 200)
+  assert.equal(del.json().ok, true)
+
+  const list = await app.inject({ url: '/api/items', headers: { cookie } })
+  assert.equal(list.json().items.length, 0)
+
+  const missing = await app.inject({ method: 'DELETE', url: '/api/items/9999', headers: { cookie } })
+  assert.equal(missing.statusCode, 404)
+
+  await closeTestApp(app, db)
+})
+
+test('delete endpoint removes stored file from disk', async () => {
+  const db = testDb()
+  const uploadDir = testUploadDir()
+  const app = createApp({ db, uploadDir })
+  const cookie = await authCookie(app)
+
+  const upload = await app.inject(uploadRequest({ filename: 'bye.txt', mimeType: 'text/plain', cookie }))
+  const fileId = upload.json().item.id
+  const storedName = (db.prepare('SELECT stored_name FROM files WHERE item_id = ?').get(fileId) as { stored_name: string }).stored_name
+  const filePath = join(uploadDir, storedName)
+  assert.equal(existsSync(filePath), true)
+
+  const del = await app.inject({ method: 'DELETE', url: `/api/items/${fileId}`, headers: { cookie } })
+  assert.equal(del.statusCode, 200)
+  assert.equal(existsSync(filePath), false)
+
+  rmSync(uploadDir, { recursive: true, force: true })
+  await closeTestApp(app, db)
+})
+
 test('frontend delete-account flow asks auth/me which screen is required after deletion', () => {
   const source = appSource()
   const deleteScreen = sourceBetween(

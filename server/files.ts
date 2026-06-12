@@ -1,5 +1,5 @@
 import type Database from 'better-sqlite3'
-import { createReadStream, existsSync, mkdirSync, writeFileSync } from 'node:fs'
+import { createReadStream, existsSync, mkdirSync, rmSync, writeFileSync } from 'node:fs'
 import { basename, extname, resolve, sep } from 'node:path'
 import { randomBytes } from 'node:crypto'
 
@@ -195,6 +195,19 @@ export function listFileRows(db: Database.Database) {
        ORDER BY item_id DESC`,
     )
     .all() as FileRow[]
+}
+
+export function deleteStoredFile(db: Database.Database, uploadDir: string, itemId: number) {
+  const row = db
+    .prepare('SELECT stored_name FROM files WHERE item_id = ?')
+    .get(itemId) as { stored_name: string } | undefined
+  if (!row) return
+  try {
+    const filePath = resolveStoredFilePath(uploadDir, row.stored_name)
+    rmSync(filePath, { force: true })
+  } catch {
+    // ignore – file may already be missing
+  }
 }
 
 export function openStoredFile(
