@@ -830,15 +830,7 @@ function Composer({
   const [error, setError] = useState('')
 
   const isNote = createType === 'note'
-  const isReminder = createType === 'todo'
-  const isList = createType === 'list'
-  const placeholder = isNote
-    ? '나에게 입력...'
-    : createType === 'list'
-      ? '리스트 제목 입력...'
-      : isReminder
-        ? 'Reminder 제목 입력...'
-        : `${typeLabel(createType)} 입력...`
+  const placeholder = isNote ? '나에게 입력...' : `${typeLabel(createType)} 입력...`
   const canSend = createType === 'file' ? selectedFile !== null : draft.trim().length > 0
 
   function resetComposer() {
@@ -852,16 +844,6 @@ function Composer({
 
   async function submit(event: FormEvent) {
     event.preventDefault()
-
-    if (isReminder) {
-      setReminderSheetOpen(true)
-      return
-    }
-
-    if (isList) {
-      setListSheetOpen(true)
-      return
-    }
 
     setIsSending(true)
     setError('')
@@ -927,9 +909,15 @@ function Composer({
               className={entry.type === createType ? 'selected' : ''}
               key={entry.type}
               onClick={() => {
-                setCreateType(entry.type)
                 setMenuOpen(false)
                 setError('')
+                if (entry.type === 'todo') {
+                  setReminderSheetOpen(true)
+                } else if (entry.type === 'list') {
+                  setListSheetOpen(true)
+                } else {
+                  setCreateType(entry.type)
+                }
               }}
               type="button"
             >
@@ -939,7 +927,7 @@ function Composer({
         </div>
       )}
 
-      {!isNote && !isReminder && !isList && (
+      {!isNote && (
         <div className="detail-tray">
           <span>{typeLabel(createType)}</span>
           {createType === 'file' ? (
@@ -1003,30 +991,12 @@ function Composer({
           placeholder={createType === 'file' ? selectedFile?.name ?? '파일 선택' : placeholder}
           value={createType === 'file' ? selectedFile?.name ?? '' : draft}
         />
-        {isReminder ? (
-          <button
-            className="send-button"
-            onClick={() => setReminderSheetOpen(true)}
-            type="button"
-          >
-            Add Reminder
-          </button>
-        ) : isList ? (
-          <button
-            className="send-button"
-            onClick={() => setListSheetOpen(true)}
-            type="button"
-          >
-            Add List
-          </button>
-        ) : (
-          <button className="send-button" disabled={isSending || !canSend} type="submit">
-            보내기
-          </button>
-        )}
+        <button className="send-button" disabled={isSending || !canSend} type="submit">
+          보내기
+        </button>
       </div>
     </form>
-      {reminderSheetOpen && isReminder && (
+      {reminderSheetOpen && (
         <ReminderSheet
           initialTitle={draft}
           onCancel={() => {
@@ -1040,7 +1010,7 @@ function Composer({
           }}
         />
       )}
-      {listSheetOpen && isList && (
+      {listSheetOpen && (
         <ListSheet
           initialTitle={draft}
           onCancel={() => {
